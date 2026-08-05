@@ -1,0 +1,257 @@
+/* 보물섬 점령전 — 화면 목업 공통 스타일
+   디자인 스펙은 docs/PROJECT_SPEC.md 기준 */
+
+:root{
+  --sea:#4aa8d8; --sea-dark:#2f86b4;
+  --sand:#f5d9a0; --sand-line:#e0be7d;
+  --H:#e05a4f; --C:#2f9e44;          /* 홍팀 / 청팀 */
+  --ink:#2b3a44; --panel:#fffdf5;
+  --gold:#f0b429;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--sea); color:var(--ink);
+  font-family:"Noto Sans KR","Malgun Gothic",AppleGothic,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── 헤더 ─────────────────────────────── */
+.hd{
+  display:flex; align-items:center; gap:14px;
+  background:linear-gradient(180deg,#2f86b4,#2573a0);
+  padding:10px 18px; color:#fff; border-bottom:3px solid #1d5b80;
+}
+.hd .logo{
+  background:var(--gold); color:#5b3d06; font-weight:800; font-size:19px;
+  padding:6px 16px; border-radius:10px; border:2px solid #c98f18;
+  box-shadow:0 2px 0 #a97612;
+}
+.hd .sub{font-size:14px; opacity:.92}
+.hd .gear{margin-left:auto; font-size:24px; cursor:pointer; line-height:1}
+
+/* ── 레이아웃 ─────────────────────────── */
+.wrap{display:flex; gap:14px; padding:14px; align-items:flex-start}
+.mapbox{
+  background:var(--panel); border-radius:12px; padding:12px 14px 14px;
+  box-shadow:0 4px 14px rgba(0,0,0,.18); flex:1 1 auto;
+}
+.side{width:262px; flex:0 0 262px; display:flex; flex-direction:column; gap:10px}
+.card{
+  background:var(--panel); border-radius:12px; padding:11px 13px;
+  box-shadow:0 4px 14px rgba(0,0,0,.18);
+}
+.card h4{margin:0 0 8px; font-size:12px; letter-spacing:.04em; color:#7b8892; font-weight:700}
+
+/* ── 보드 ─────────────────────────────── */
+.board{display:grid; gap:2px; grid-auto-rows:var(--cell)}
+.board .hdr{
+  background:transparent; font-size:11px; font-weight:700; color:#8a7a5c;
+  display:flex; align-items:center; justify-content:center;
+  width:var(--cell); height:var(--cell);
+}
+.cell{
+  position:relative; width:var(--cell); height:var(--cell); border-radius:3px;
+  background:var(--sand); border:1px solid var(--sand-line);
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; color:#a08f6d; overflow:hidden;
+}
+.cell .lab{position:absolute; top:1px; left:2px; font-size:7px; opacity:.42; letter-spacing:-.02em}
+.cell .ico{font-size:13px; line-height:1}
+
+/* 팀 색 + 패턴 (회색조에서도 구분되도록) */
+.cell.H{
+  background:var(--H); border-color:#b8443a; color:#fff;
+  background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.20) 0 3px,transparent 3px 7px);
+}
+.cell.C{
+  background:var(--C); border-color:#237a33; color:#fff;
+  background-image:repeating-linear-gradient(-45deg,rgba(255,255,255,.20) 0 3px,transparent 3px 7px);
+}
+.cell.H .lab,.cell.C .lab{opacity:.6}
+
+/* 말 배지 */
+.pawn{
+  position:absolute; right:1px; bottom:1px; font-size:8px; font-weight:800;
+  background:#fff; color:var(--ink); border-radius:6px; padding:0 3px;
+  border:1px solid rgba(0,0,0,.25); line-height:13px;
+}
+.pawn.h{color:#b8443a} .pawn.c{color:#237a33}
+.cell.me{outline:3px solid #14304a; outline-offset:-3px; z-index:3}
+
+/* 상태 표시 */
+.cell.attacking{background:#ff4d4d !important; box-shadow:0 0 0 2px #ff4d4d, 0 0 12px #ff4d4d; z-index:2}
+.cell.attacking .ico,.cell.attacking .lab{color:#fff; opacity:.9}
+.cell.can{outline:3px solid #12b5c9; outline-offset:-3px; cursor:pointer; z-index:2}
+.cell.can.enemy{outline-color:#f08a24}
+.cell.can.move{outline-color:#9aa5ad}
+.cell.locked{filter:brightness(.86) saturate(.55)}
+.cell.locked::after{
+  content:"🔒"; position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; font-size:15px; background:rgba(20,48,74,.28); border-radius:2px;
+}
+
+/* ── 점수판 ───────────────────────────── */
+.score{display:flex; align-items:baseline; gap:8px}
+.score .flag{font-size:17px}
+.score .nm{font-size:14px; font-weight:800}
+.score .pt{margin-left:auto; font-size:30px; font-weight:900; line-height:1}
+.score.h .nm,.score.h .pt{color:var(--H)}
+.score.c .nm,.score.c .pt{color:var(--C)}
+.score-sub{text-align:right; font-size:11px; color:#96a1aa; margin-top:1px}
+
+.kv{display:flex; align-items:center; gap:8px; font-size:13px; padding:3px 0}
+.kv .k{color:#7b8892; font-size:12px}
+.kv .v{margin-left:auto; font-weight:800}
+.turn-h{color:var(--H)} .turn-c{color:var(--C)}
+.timer{font-size:32px; font-weight:900; text-align:center; letter-spacing:.04em; color:#e03131}
+
+.legend{display:grid; grid-template-columns:repeat(5,1fr); gap:5px; text-align:center; font-size:10px; color:#7b8892}
+.legend b{display:block; font-size:16px; font-weight:400; line-height:20px}
+.legend .sw{
+  display:inline-block; width:15px; height:15px; border-radius:3px;
+  background:var(--sand); border:1px solid var(--sand-line); vertical-align:-2px;
+}
+
+.roster div{font-size:12px; padding:2px 0; display:flex; align-items:center; gap:5px; flex-wrap:wrap}
+.roster .dot{width:7px; height:7px; border-radius:50%; display:inline-block}
+.roster .dot.h{background:var(--H)} .roster .dot.c{background:var(--C)}
+.roster .on{background:#eef3f6; border-radius:5px; padding:1px 6px}
+.roster .solving{background:#fff4d6; border:1px solid #f0d28a}
+
+.btns{display:flex; gap:7px}
+.btn{
+  flex:1; padding:11px 8px; border-radius:9px; border:none; cursor:pointer;
+  font-size:14px; font-weight:800; font-family:inherit;
+}
+.btn.turn{background:var(--gold); color:#5b3d06; box-shadow:0 3px 0 #c98f18; font-size:17px; flex:1.5}
+.btn.gray{background:#e3e8eb; color:#4c5a63; font-size:12px}
+
+/* ── 학생 화면 ────────────────────────── */
+.stu{max-width:960px; margin:0 auto}
+.stu .me-bar{
+  display:flex; align-items:center; gap:9px; background:var(--panel);
+  border-radius:11px; padding:9px 13px; margin-bottom:11px; box-shadow:0 3px 10px rgba(0,0,0,.15);
+}
+.tag{font-size:12px; font-weight:800; color:#fff; padding:3px 10px; border-radius:20px}
+.tag.h{background:var(--H)} .tag.c{background:var(--C)}
+.quiz{background:var(--panel); border-radius:12px; padding:16px 18px; box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.qhead{display:flex; align-items:center; gap:9px; font-size:12px; color:#7b8892; margin-bottom:9px}
+.qhead .cellname{background:#eef3f6; padding:2px 9px; border-radius:6px; font-weight:800; color:var(--ink)}
+.qtext{font-size:21px; font-weight:800; line-height:1.4; margin:6px 0 15px}
+.opts{display:grid; grid-template-columns:1fr 1fr; gap:9px}
+.opt{
+  display:flex; align-items:center; gap:9px; padding:13px 15px; border-radius:10px;
+  background:#f4f7f9; border:2px solid #dde5ea; font-size:16px; font-weight:600; cursor:pointer;
+}
+.opt .num{
+  width:24px; height:24px; border-radius:50%; background:#cfd9e0; color:#fff;
+  display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:800; flex:0 0 24px;
+}
+.opt.right{background:#e8f8ee; border-color:#2fbf71}
+.opt.right .num{background:#2fbf71}
+.opt.wrong{background:#fdeaea; border-color:#e03131}
+.opt.wrong .num{background:#e03131}
+.bar{height:9px; border-radius:5px; background:#e3e8eb; overflow:hidden; margin-top:15px}
+.bar > i{display:block; height:100%; background:linear-gradient(90deg,#f0b429,#e8853a)}
+
+/* 결과 */
+.result{text-align:center; padding:10px 0 4px}
+.result .big{font-size:44px; font-weight:900; letter-spacing:-.02em}
+.result .big.ok{color:#2fbf71} .result .big.no{color:#e03131}
+.result .msg{font-size:15px; color:#5c6b75; margin-top:5px}
+.gain{display:inline-flex; gap:22px; background:#f4f7f9; border-radius:11px; padding:11px 26px; margin-top:14px}
+.gain div{font-size:12px; color:#7b8892}
+.gain b{display:block; font-size:21px; color:var(--ink); margin-top:2px}
+
+/* ── 모달 ─────────────────────────────── */
+.dim{position:fixed; inset:0; z-index:100; background:rgba(12,32,46,.55); display:flex; align-items:center; justify-content:center}
+.modal{
+  background:var(--panel); border-radius:14px; padding:20px 22px; width:430px;
+  box-shadow:0 18px 50px rgba(0,0,0,.4);
+}
+.modal.wide{width:580px}
+.modal h3{margin:0 0 4px; font-size:19px}
+.modal .note{font-size:12px; color:#7b8892; line-height:1.55}
+.warn{background:#fff4d6; border:1px solid #f0d28a; border-radius:9px; padding:10px 12px; font-size:12.5px; margin:13px 0; line-height:1.55}
+.warn.hot{background:#fdeaea; border-color:#f3b0b0; color:#a52020}
+.frow{display:flex; align-items:center; gap:9px; margin:9px 0}
+.frow label{width:120px; font-size:12.5px; color:#5c6b75; flex:0 0 120px}
+.frow input{
+  flex:1; padding:8px 10px; border:1px solid #cfd9e0; border-radius:7px;
+  font-size:13px; font-family:inherit; background:#fff; min-width:0;
+}
+.frow input.s{flex:0 0 66px}
+.frow.tight{gap:6px}
+.frow.tight input.s{flex:0 0 58px}
+.hint{background:#eef7f1; border-left:3px solid #2fbf71; padding:9px 11px; font-size:12px; border-radius:0 7px 7px 0; line-height:1.65; color:#3c5a49}
+.mbtns{display:flex; gap:9px; justify-content:flex-end; margin-top:17px}
+.mbtn{padding:10px 20px; border-radius:9px; border:none; font-size:14px; font-weight:800; cursor:pointer; font-family:inherit}
+.mbtn.p{background:var(--gold); color:#5b3d06}
+.mbtn.g{background:#e3e8eb; color:#4c5a63}
+
+/* ── 진입 화면 ────────────────────────── */
+.entry{
+  min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  background:radial-gradient(ellipse at 50% 32%,#6fc2e6 0%,#3f97c9 48%,#2573a0 100%);
+}
+.entry .title{
+  background:var(--gold); color:#5b3d06; font-size:38px; font-weight:900;
+  padding:14px 46px; border-radius:18px; border:4px solid #c98f18;
+  box-shadow:0 6px 0 #a97612,0 14px 32px rgba(0,0,0,.28);
+}
+.entry .lead{color:#fff; font-size:16px; margin:16px 0 34px; text-shadow:0 1px 3px rgba(0,0,0,.3)}
+.picks{display:flex; gap:22px}
+.pick{
+  background:var(--panel); border-radius:18px; width:230px; padding:28px 20px;
+  text-align:center; box-shadow:0 10px 28px rgba(0,0,0,.28); cursor:pointer;
+}
+.pick .emoji{font-size:56px; line-height:1}
+.pick .nm{font-size:22px; font-weight:900; margin-top:10px}
+.pick .ds{font-size:12.5px; color:#7b8892; margin-top:7px; line-height:1.5}
+.entry .foot{color:#e8f4fa; font-size:12px; margin-top:30px; opacity:.85}
+
+/* ── 섬 배경 (05 관리자 화면 시안) ─────────────────────
+   외부 이미지 없이 인라인 SVG로 그린다. .isle 클래스만 빼면 원래 흰 패널로 돌아간다. */
+.mapbox.isle{
+  position:relative; background:transparent; box-shadow:none; flex:0 0 auto;
+  padding:56px 56px 44px; border-radius:18px; overflow:hidden;
+  box-shadow:0 6px 20px rgba(0,0,0,.22);
+}
+.mapbox.isle > svg.scene{position:absolute; inset:0; width:100%; height:100%; display:block}
+.mapbox.isle > *:not(svg){position:relative; z-index:1}
+.mapbox.isle .frame{
+  background:rgba(255,255,255,.44);
+  border:3px solid rgba(255,255,255,.9);
+  border-radius:13px; padding:9px; display:inline-block;
+  box-shadow:0 3px 12px rgba(20,60,90,.18);
+}
+/* 섬 위에서는 셀 경계가 또렷해야 한다 */
+.mapbox.isle .cell{border-color:#d9b878}
+.mapbox.isle .board .hdr{color:#fff; text-shadow:0 1px 2px rgba(20,60,90,.55); font-size:12px}
+.mapbox.isle .legendbar{color:#eaf6fd; text-shadow:0 1px 2px rgba(20,60,90,.5); border-top-color:rgba(255,255,255,.35)}
+
+/* ── 전체 배경 시안 (05) ────────────────────────────────
+   보물섬 일러스트를 페이지 전체 배경으로 깔고, 그 위에 반투명 패널을 얹는다.
+   프레임 안에 그림을 넣는 방식(.isle)이 아니다. */
+body.bgscene{
+  background:url("../img/보물섬배경화면.png") 90% center / auto 122% no-repeat fixed, #2f86b4;
+}
+body.bgscene .hd{
+  background:linear-gradient(180deg, rgba(30,90,128,.88), rgba(23,72,104,.88));
+  backdrop-filter:blur(6px); border-bottom-color:rgba(255,255,255,.22);
+}
+/* 보드: 모래사장 위에 얹는 반투명 유리판 */
+body.bgscene .mapbox{
+  background:rgba(255,252,242,.50); backdrop-filter:blur(2px);
+  border:3px solid rgba(255,255,255,.72); border-radius:16px;
+  box-shadow:0 10px 34px rgba(10,40,64,.34); flex:0 0 auto;
+}
+body.bgscene .cell{border-color:#cdaa6f}
+body.bgscene .board .hdr{color:#3b4d59; font-weight:800}
+/* 오른쪽 카드도 살짝 비치게 */
+body.bgscene .card{background:rgba(255,253,245,.94); backdrop-filter:blur(4px); box-shadow:0 6px 18px rgba(10,40,64,.28)}
+body.bgscene .legendbar{
+  color:#fff; text-shadow:0 1px 3px rgba(10,40,64,.75);
+  background:rgba(16,58,86,.42); backdrop-filter:blur(4px);
+  border-radius:9px; padding:7px 12px !important;
+}

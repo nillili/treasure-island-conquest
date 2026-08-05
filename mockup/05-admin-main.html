@@ -1,0 +1,76 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>관리자 화면</title><link rel="stylesheet" href="ui.css"></head>
+<body class="bgscene">
+<div class="hd">
+  <span class="logo">🏝 보물섬 점령전</span>
+  <span class="sub">홍팀 vs 청팀 · 팀전 전략 퀴즈 게임</span>
+  <span class="gear">⚙</span>
+</div>
+
+<div class="wrap">
+  <div style="display:flex;flex-direction:column;gap:9px;flex:0 0 auto">
+  <div class="mapbox">
+    <div id="bd"></div>
+  </div>
+  <div class="legendbar" style="display:flex;align-items:center;gap:16px;font-size:11.5px;padding:0 6px">
+      <span><span style="display:inline-block;width:11px;height:11px;background:#e05a4f;border-radius:2px;vertical-align:-1px"></span> 홍팀(우상향 사선)</span>
+      <span><span style="display:inline-block;width:11px;height:11px;background:#2f9e44;border-radius:2px;vertical-align:-1px"></span> 청팀(좌상향 사선)</span>
+      <span><span style="display:inline-block;width:11px;height:11px;background:#ff4d4d;border-radius:2px;vertical-align:-1px"></span> 공략 중(반짝임)</span>
+      <span style="margin-left:auto">셀을 클릭하면 그 칸의 문제를 볼 수 있습니다</span>
+  </div>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <div class="score h"><span class="flag">🚩</span><span class="nm">홍팀</span><span class="pt">18</span></div>
+      <div class="score-sub">영토 12 + 보너스 6</div>
+      <div style="height:9px"></div>
+      <div class="score c"><span class="flag">🏴</span><span class="nm">청팀</span><span class="pt">16</span></div>
+      <div class="score-sub">영토 11 + 보너스 5</div>
+    </div>
+
+    <div class="card">
+      <div class="kv"><span>🏆</span><span class="k">현재 라운드</span><span class="v">7 / 10</span></div>
+      <div class="kv"><span>🔄</span><span class="k">현재 차례</span><span class="v turn-h">홍팀</span></div>
+    </div>
+
+    <div class="card">
+      <div class="kv" style="padding:0"><span>⏳</span><span class="k">남은 시간</span></div>
+      <div class="timer">00:22</div>
+    </div>
+
+    <div class="card">
+      <h4>칸 종류 안내</h4>
+      <div class="legend">
+        <div><b><span class="sw"></span></b>일반<br><span style="opacity:.7">1점</span></div>
+        <div><b>?</b>퀴즈<br><span style="opacity:.7">2점</span></div>
+        <div><b>📦</b>보물<br><span style="opacity:.7">3점</span></div>
+        <div><b>⛈️</b>폭풍<br><span style="opacity:.7">쉬기</span></div>
+        <div><b>💥</b>공격<br><span style="opacity:.7">뺏기</span></div>
+      </div>
+    </div>
+
+    <div class="card roster">
+      <h4>팀원 현황 <span style="float:right;font-weight:400">접속 10명</span></h4>
+      <div><span class="dot h"></span>
+        <span class="on solving">홍길동 ●</span><span class="on">김철수</span><span class="on">박민수</span>
+      </div>
+      <div style="margin-left:13px"><span class="on solving">최지우 ●</span><span class="on">강하늘</span></div>
+      <div style="margin-top:6px"><span class="dot c"></span>
+        <span class="on">이영희</span><span class="on">정수빈</span><span class="on">윤서연</span>
+      </div>
+      <div style="margin-left:13px"><span class="on">임재현</span><span class="on">오하은</span></div>
+      <div style="font-size:10.5px;color:#96a1aa;margin-top:7px">● = 지금 문제를 푸는 중</div>
+    </div>
+
+    <div class="btns">
+      <button class="btn turn">턴</button>
+      <button class="btn gray">새 게임</button>
+      <button class="btn gray">종료</button>
+    </div>
+  </div>
+</div>
+
+<script src="board.js"></script>
+<script>renderBoard('bd',{admin:true, cellPx:44});</script>
+</body></html>

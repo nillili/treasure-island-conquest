@@ -1,0 +1,18 @@
+{
+  "name": "treasure-island-conquest",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler types --check && tsc --noEmit && wrangler deploy --dry-run",
+    "types": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "^26.1.2",
+    "typescript": "latest",
+    "wrangler": "latest"
+  }
+}

@@ -1,0 +1,60 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>학생 화면 — 칸 선택</title><link rel="stylesheet" href="ui.css"></head>
+<body>
+<div class="hd">
+  <span class="logo">🏝 보물섬 점령전</span>
+  <span class="sub">학생 화면</span>
+</div>
+
+<div class="wrap stu" style="flex-direction:column">
+  <div class="me-bar" style="width:100%">
+    <span class="tag h">홍팀</span>
+    <b style="font-size:15px">박민수</b>
+    <span style="font-size:12px;color:#7b8892">내 위치 D6 · 맞힌 문제 4</span>
+    <span style="margin-left:auto;font-size:13px">
+      <b style="color:#e05a4f">홍 18</b>
+      <span style="color:#c3ccd2;margin:0 6px">:</span>
+      <b style="color:#2f9e44">청 16</b>
+    </span>
+    <span style="font-size:13px;color:#7b8892;margin-left:14px">남은 시간 <b style="color:#e03131;font-size:17px">00:38</b></span>
+  </div>
+
+  <div style="display:flex;gap:14px;width:100%;align-items:flex-start">
+    <div class="mapbox">
+      <div id="bd"></div>
+    </div>
+    <div class="side" style="width:236px;flex:0 0 236px">
+      <div class="card" style="background:#fff4d6;border:2px solid #f0d28a">
+        <div style="font-size:15px;font-weight:800;margin-bottom:6px">🎯 어디를 공략할까?</div>
+        <div style="font-size:12.5px;color:#6b7780;line-height:1.6">
+          내 말 <b>D6</b> 의 <b>위·아래·왼쪽·오른쪽</b> 칸 중 하나를 고르세요.
+        </div>
+      </div>
+      <div class="card">
+        <h4>고를 수 있는 칸</h4>
+        <div style="font-size:12px;line-height:2">
+          <div><span style="display:inline-block;width:11px;height:11px;border:3px solid #12b5c9;border-radius:3px;vertical-align:-1px"></span>
+            &nbsp;<b>D7</b> 빈 칸 — 문제를 풉니다</div>
+          <div><span style="display:inline-block;width:11px;height:11px;border:3px solid #12b5c9;border-radius:3px;vertical-align:-1px"></span>
+            &nbsp;<b>C6</b> 빈 칸 — 문제를 풉니다</div>
+          <div><span style="display:inline-block;width:11px;height:11px;border:3px solid #9aa5ad;border-radius:3px;vertical-align:-1px"></span>
+            &nbsp;<b>D5</b> 우리 땅 — 이동만(0점)</div>
+          <div style="opacity:.55">🔒&nbsp;<b>E6</b> 친구가 공략 중 — 못 고름</div>
+        </div>
+      </div>
+      <div class="card">
+        <h4>지도 보는 법</h4>
+        <div style="font-size:11.5px;color:#6b7780;line-height:1.9">
+          <div><b>?</b> &nbsp;아직 아무도 안 간 칸</div>
+          <div><span style="color:#e05a4f">■</span> 홍팀 땅 &nbsp; <span style="color:#2f9e44">■</span> 청팀 땅</div>
+          <div>🔒 친구가 지금 푸는 중</div>
+          <div>굵은 테두리 = 내 말</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="board.js"></script>
+<script>renderBoard('bd',{admin:false, showPick:true, cellPx:40});</script>
+</body></html>
