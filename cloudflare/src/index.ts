@@ -3,6 +3,7 @@ const ACTIONS = new Set([
   "adminNewGame", "adminNextTurn", "adminEndGame", "adminKick", "adminPeekCell",
   "adminGetConfig", "adminSaveConfig",
   "adminGetLog", "adminRestore", "adminDiagnose", "adminRepair",
+  "clientLog",
 ]);
 
 const SECURITY_HEADERS = {

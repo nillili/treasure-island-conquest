@@ -1,7 +1,25 @@
 "use strict";
-const APP={role:null,playerId:null,token:null,state:null,rev:-1,myQuizzes:{},mode:"waiting",pollTimer:null,currentCell:null,pickPromise:null,peek:null,loginRole:null,quizCount:0};
+const APP={role:null,playerId:null,token:null,state:null,rev:-1,myQuizzes:{},mode:"waiting",pollTimer:null,currentCell:null,pickPromise:null,peek:null,loginRole:null,quizCount:0,
+  clockOffset:0,lastPollAt:0,beaconAt:{}};
 // Backend.gs 의 BACKEND_VERSION 과 같아야 한다. 다르면 [시스템 점검]이 배포 어긋남을 잡아낸다.
-const APP_VERSION=18;
+const APP_VERSION=19;
+
+// ── 시계 ────────────────────────────────────────────────────────────────────
+// 남은 시간은 반드시 이 now() 로 잰다. Date.now() 를 그대로 쓰면 학생 컴퓨터 시계가
+// 몇 분만 틀어져도 "턴이 이미 끝났다"고 판단해 칸을 하나도 못 누르게 된다.
+// 2026-08-06 수업에서 한 학생이 21분 동안 요청 0건이었던 원인이 이것이다.
+function now(){return Date.now()+APP.clockOffset}
+function applyServerNow(r){if(r&&typeof r.serverNow==="number")APP.clockOffset=r.serverNow-Date.now()}
+
+// ── 화면이 스스로 보내는 진단 신호 ─────────────────────────────────────────
+// 멈춘 화면은 서버에 아무 요청도 안 보내므로 서버 로그에는 흔적이 남지 않는다.
+// 그래서 "나 지금 이래서 못 누른다"를 화면이 직접 알려 준다. 실패해도 무시한다.
+function reportClient(tag,info){
+  if(APP.role!=="student"||!APP.playerId)return;
+  const last=APP.beaconAt[tag]||0;if(Date.now()-last<5000)return;APP.beaconAt[tag]=Date.now();
+  void fetch("/api/clientLog",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({playerId:APP.playerId,tag,info:info||{}})}).catch(()=>{});
+}
 const ICON={N:"",Q:"",T:"📦",S:"⛈️",A:"💥"};
 const $=id=>document.getElementById(id);
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
@@ -17,24 +35,27 @@ function closeModal(id){$(id).classList.add("hidden")}
 function showScreen(id){$("entry").classList.add("hidden");$("student-screen").classList.add("hidden");$("admin-screen").classList.add("hidden");$(id).classList.remove("hidden")}
 function openLogin(role){APP.loginRole=role;$("login-title").textContent=role==="student"?"학생 이름":"관리자 비밀번호";$("login-input").type=role==="student"?"text":"password";$("login-input").value="";$("login-modal").classList.remove("hidden");$("login-input").focus()}
 
-async function loginStudent(name){try{const saved=localStorage.getItem("treasure-player-id")||"";const r=await call("joinAsStudent",{name,playerId:saved});APP.role="student";APP.playerId=r.playerId;APP.myQuizzes=r.allQuizzes||{};APP.gameId=null;localStorage.setItem("treasure-player-id",r.playerId);localStorage.setItem("treasure-player-name",name);showScreen("student-screen");forcePoll(!Object.keys(APP.myQuizzes).length)}catch(error){toast(error.message)}}
+async function loginStudent(name){try{const saved=localStorage.getItem("treasure-player-id")||"";const r=await call("joinAsStudent",{name,playerId:saved});applyServerNow(r);APP.role="student";APP.playerId=r.playerId;APP.myQuizzes=r.allQuizzes||{};APP.gameId=null;localStorage.setItem("treasure-player-id",r.playerId);localStorage.setItem("treasure-player-name",name);showScreen("student-screen");
+  // 입장하자마자 이 컴퓨터 시계가 서버와 얼마나 어긋나 있는지 남긴다. 감시 화면에서 바로 보인다.
+  reportClient("join",{시계차:Math.round(APP.clockOffset/1000)+"초",문항:Object.keys(APP.myQuizzes).length});
+  forcePoll(!Object.keys(APP.myQuizzes).length)}catch(error){toast(error.message)}}
 // 서버에서 내 말이 사라졌을 때 저장해 둔 이름으로 조용히 다시 들어간다.
 // 30명 앞에서 "다시 입장해 주세요"가 뜨고 이름을 다시 치게 하면 수업이 멈춘다.
 // 새 게임이 열리면 이 게임의 칸↔문제 배정표를 새로 받아 온다.
 // joinAsStudent 는 이미 들어와 있는 학생이면 잠금 없이 배정표만 돌려주므로 가볍다.
 async function refreshQuizBank(){
   try{const r=await call("joinAsStudent",{playerId:APP.playerId,name:localStorage.getItem("treasure-player-name")||""});
-    APP.myQuizzes=r.allQuizzes||{};APP.playerId=r.playerId;localStorage.setItem("treasure-player-id",r.playerId)}
+    applyServerNow(r);APP.myQuizzes=r.allQuizzes||{};APP.playerId=r.playerId;localStorage.setItem("treasure-player-id",r.playerId)}
   catch(error){APP.myQuizzes={}}
 }
-async function rejoinStudent(){const name=localStorage.getItem("treasure-player-name")||"";if(!name)return false;try{const r=await call("joinAsStudent",{name});APP.playerId=r.playerId;APP.rev=-1;APP.myQuizzes=r.allQuizzes||{};APP.mode="waiting";localStorage.setItem("treasure-player-id",r.playerId);toast("연결이 끊겨 자동으로 다시 들어왔어요.");schedulePoll(true);return true}catch{return false}}
+async function rejoinStudent(){const name=localStorage.getItem("treasure-player-name")||"";if(!name)return false;try{const r=await call("joinAsStudent",{name});applyServerNow(r);APP.playerId=r.playerId;APP.rev=-1;APP.myQuizzes=r.allQuizzes||{};APP.mode="waiting";localStorage.setItem("treasure-player-id",r.playerId);toast("연결이 끊겨 자동으로 다시 들어왔어요.");schedulePoll(true);return true}catch{return false}}
 async function loginAdmin(pw){try{const r=await call("loginAsAdmin",{pw});APP.role="admin";APP.token=r.token;showScreen("admin-screen");forcePoll(false)}catch(error){toast(error.message)}}
 function leaveApp(){clearTimeout(APP.pollTimer);Object.assign(APP,{role:null,playerId:null,token:null,state:null,rev:-1,myQuizzes:{},mode:"waiting"});$("student-screen").classList.add("hidden");$("admin-screen").classList.add("hidden");$("entry").classList.remove("hidden")}
 
 function forcePoll(need){clearTimeout(APP.pollTimer);void pollState(Boolean(need))}
 async function pollState(need){
-  if(!APP.role)return;if(document.hidden){APP.pollTimer=setTimeout(()=>pollState(need),2000);return}
-  try{const arg={rev:APP.rev,needQuizzes:Boolean(need)};if(APP.role==="student")arg.playerId=APP.playerId;else arg.token=APP.token;const r=await call("getState",arg);if(APP.role==="student"&&r.gameId){if(APP.gameId&&r.gameId!==APP.gameId){APP.myQuizzes={};APP.mode="waiting";hideQuiz();void refreshQuizBank()}APP.gameId=r.gameId}if(r.myQuizzes&&!Object.keys(APP.myQuizzes).length)APP.myQuizzes=r.myQuizzes;if(!r.nochange){const changed=APP.state&&(APP.state.turnTeam!==r.turnTeam||APP.state.round!==r.round);APP.state=r;APP.rev=r.rev;if(changed&&APP.mode!=="solving")APP.mode="waiting"}else{APP.rev=r.rev;if(APP.state){APP.state.turnEndsAt=r.endsAt;if(r.presence)APP.state.presence=r.presence;if(r.iAmSkipping!==undefined)APP.state.iAmSkipping=r.iAmSkipping}}if(APP.role==="student")renderStudent();else renderAdmin();const wants=APP.role==="student"&&!Object.keys(APP.myQuizzes).length&&APP.mode!=="solving";APP.failStreak=0;schedulePoll(wants)}catch(error){
+  if(!APP.role)return;APP.lastPollAt=Date.now();if(document.hidden){APP.pollTimer=setTimeout(()=>pollState(need),2000);return}
+  try{const arg={rev:APP.rev,needQuizzes:Boolean(need)};if(APP.role==="student")arg.playerId=APP.playerId;else arg.token=APP.token;const r=await call("getState",arg);applyServerNow(r);if(APP.role==="student"&&r.gameId){if(APP.gameId&&r.gameId!==APP.gameId){APP.myQuizzes={};APP.mode="waiting";hideQuiz();void refreshQuizBank()}APP.gameId=r.gameId}if(r.myQuizzes&&!Object.keys(APP.myQuizzes).length)APP.myQuizzes=r.myQuizzes;if(!r.nochange){const changed=APP.state&&(APP.state.turnTeam!==r.turnTeam||APP.state.round!==r.round);APP.state=r;APP.rev=r.rev;if(changed&&APP.mode!=="solving")APP.mode="waiting"}else{APP.rev=r.rev;if(APP.state){APP.state.turnEndsAt=r.endsAt;if(r.presence)APP.state.presence=r.presence;if(r.iAmSkipping!==undefined)APP.state.iAmSkipping=r.iAmSkipping}}if(APP.role==="student")renderStudent();else renderAdmin();const wants=APP.role==="student"&&!Object.keys(APP.myQuizzes).length&&APP.mode!=="solving";APP.failStreak=0;schedulePoll(wants)}catch(error){
     const msg=error.message||"";
     // 선생님이 일부러 초기화한 것이면 자동 복구하지 않고 입장 화면으로 돌려보낸다.
     if(APP.role==="student"&&msg.includes("초기화했어요")){localStorage.removeItem("treasure-player-id");localStorage.removeItem("treasure-player-name");leaveApp();toast("선생님이 게임을 초기화했어요. 이름을 다시 입력해 주세요.");return}
@@ -45,11 +66,37 @@ async function pollState(need){
     if(!transient||APP.failStreak===3)toast(transient?"서버가 잠시 밀리고 있어요. 다시 연결하는 중…":msg);
     schedulePoll(false)}
 }
-function schedulePoll(need){clearTimeout(APP.pollTimer);if(!APP.role)return;const ms=APP.role==="admin"?2000:(APP.mode==="solving"?0:(APP.state?.turnTeam===myTeam()?3000:6000));if(ms)APP.pollTimer=setTimeout(()=>pollState(need),ms)}
+// 폴링은 어떤 상태에서도 절대 멈추지 않는다. 예전에는 문제를 푸는 중(solving)이면
+// 간격이 0 이 되어 setTimeout 이 아예 걸리지 않았고, 그 상태에 갇히면 화면이 영영 굳었다
+// (2026-08-06: "2문제 풀면 멈춰서 나갔다 들어와야 한다"의 원인).
+function schedulePoll(need){clearTimeout(APP.pollTimer);if(!APP.role)return;const ms=APP.role==="admin"?2000:(APP.mode==="solving"?4000:(APP.state?.turnTeam===myTeam()?3000:6000));APP.pollTimer=setTimeout(()=>pollState(need),ms)}
 function myTeam(){return APP.state?.myPlayer?.team||null}
-function canPlay(){return Boolean(APP.state&&APP.state.status==="running"&&APP.state.turnTeam===myTeam()&&!APP.state.iAmSkipping&&!APP.state.myPlayer?.playedThisTurn&&Date.now()<APP.state.turnEndsAt)}
+function canPlay(){return !playBlockReason()}
+/** 지금 못 누르는 이유를 한 마디로 돌려준다. 누를 수 있으면 빈 문자열. */
+function playBlockReason(){
+  const st=APP.state;
+  if(!st)return "상태없음";
+  if(st.status!=="running")return "게임"+(st.status==="ended"?"종료":"대기");
+  if(st.turnTeam!==myTeam())return "상대팀턴";
+  if(st.iAmSkipping)return "폭풍쉼";
+  if(st.myPlayer?.playedThisTurn)return "이번턴완료";
+  if(now()>=st.turnEndsAt)return "시간초과";
+  return "";
+}
 function formatTime(ms){const s=Math.ceil(ms/1000);return `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`}
-function updateTimers(){if(!APP.state)return;const left=Math.max(0,(APP.state.turnEndsAt||0)-Date.now()),text=formatTime(left);$("s-timer").textContent=text;$("a-timer").textContent=text;if(APP.role==="student"&&left===0&&APP.mode==="solving"){APP.mode="waiting";hideQuiz();toast("시간이 끝났어요. 상대 팀 차례로 넘어갑니다.");forcePoll(false)}}
+function updateTimers(){
+  if(!APP.state)return;
+  const left=Math.max(0,(APP.state.turnEndsAt||0)-now()),text=formatTime(left);
+  $("s-timer").textContent=text;$("a-timer").textContent=text;
+  if(APP.role==="student"&&left===0&&APP.mode==="solving"){APP.mode="waiting";hideQuiz();toast("시간이 끝났어요. 상대 팀 차례로 넘어갑니다.");forcePoll(false)}
+  // 마지막 안전장치 — 어떤 이유로든 폴링이 20초 넘게 끊기면 스스로 되살린다.
+  // 화면이 굳는 모든 경우를 여기서 한 번에 막는다. 굳은 채로 두느니 다시 두드린다.
+  if(APP.role&&APP.lastPollAt&&Date.now()-APP.lastPollAt>20000){
+    reportClient("watchdog",{mode:APP.mode,조용함:Math.round((Date.now()-APP.lastPollAt)/1000)+"초",막힘:playBlockReason()||"없음"});
+    APP.lastPollAt=Date.now();if(APP.mode==="solving"){APP.mode="waiting";hideQuiz();$("student-message").classList.remove("hidden")}
+    forcePoll(false);
+  }
+}
 
 function colLabel(c){let s="",n=c+1;while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26)}return s}
 function cellLabel(i,cols){return colLabel(i%cols)+(Math.floor(i/cols)+1)}
@@ -57,7 +104,7 @@ function cellLabel(i,cols){return colLabel(i%cols)+(Math.floor(i/cols)+1)}
 function neighbors(i,rows,cols){const r=Math.floor(i/cols),c=i%cols,out=[];for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){if(!dr&&!dc)continue;const y=r+dr,x=c+dc;if(y<0||y>=rows||x<0||x>=cols)continue;out.push(y*cols+x)}return out}
 function renderBoard(hostId,admin){const st=APP.state;if(!st?.board)return;const host=$(hostId),px=Math.max(23,Math.min(admin?45:42,Math.floor((innerWidth-(admin?330:300))/(st.cols+1))));host.className="board";host.style.setProperty("--cell",`${px}px`);host.style.gridTemplateColumns=`repeat(${st.cols+1},${px}px)`;const pawns={};Object.entries(st.players||{}).forEach(([id,p])=>{if(p.pos!==null)(pawns[p.pos]??=[]).push({id,p})});const candidates={};if(!admin&&st.myPlayer&&canPlay())neighbors(st.myPlayer.pos,st.rows,st.cols).forEach(i=>{if(st.cellLocks?.[i])return;candidates[i]=st.board[i].o===st.myPlayer.team?"move":(st.board[i].o?"enemy":"can")});let html='<div class="axis"></div>';for(let c=0;c<st.cols;c++)html+=`<div class="axis">${colLabel(c)}</div>`;for(let r=0;r<st.rows;r++){html+=`<div class="axis">${r+1}</div>`;for(let c=0;c<st.cols;c++){const i=r*st.cols+c,cell=st.board[i],classes=["cell"];if(cell.o)classes.push(cell.o);if(st.cellLocks?.[i])classes.push(admin?"attacking":"locked");if(candidates[i])classes.push("can",candidates[i]);if(!admin&&st.myPlayer?.pos===i)classes.push("me");const icon=cell.o?(ICON[cell.t]||""):"?",owner=cell.o?(cell.o==="H"?"홍팀":"청팀"):"미점령";html+=`<button class="${classes.join(" ")}" data-cell="${i}" aria-label="${cellLabel(i,st.cols)} ${owner}"><span class="coord">${cellLabel(i,st.cols)}</span><span>${icon}</span>`;if(pawns[i]){const group=pawns[i],team=group[0].p.team;html+=`<span class="pawn">${group.length>1?(team==="H"?"홍":"청")+"×"+group.length:escapeHtml(group[0].p.name.charAt(0))}</span>`}html+="</button>"}}host.innerHTML=html}
 
-function renderStudent(){const st=APP.state;if(!st?.myPlayer)return;const p=st.myPlayer;$("student-team").className=`tag ${p.team}`;$("student-team").textContent=p.team==="H"?"홍팀":"청팀";$("student-name").textContent=p.name;$("student-stats").textContent=`내 위치 ${cellLabel(p.pos,st.cols)} · 정답 ${p.correct}/${p.solved}`;$("s-score-h").textContent=st.scores.H.total;$("s-score-c").textContent=st.scores.C.total;renderBoard("student-board",false);if(APP.mode==="solving"||APP.mode==="result")return;const msg=$("student-message");if(st.status==="ended")msg.innerHTML="<b>게임이 종료되었습니다.</b>";else if(st.iAmSkipping)msg.innerHTML="<b>⛈️ 폭풍에 갇혔어요! 이번 턴은 쉽니다.</b>";else if(p.playedThisTurn)msg.innerHTML="<b>이번 턴의 문제를 풀었습니다.</b><br><small>상대 팀 턴이 끝날 때까지 기다려 주세요.</small>";else if(!canPlay())msg.innerHTML="<b>선생님이 우리 팀 턴을 시작할 때까지 기다려 주세요.</b>";else{APP.mode="select";msg.innerHTML="<b>🎯 어디를 공략할까?</b><br><small>내 말의 위·아래·왼쪽·오른쪽 칸을 고르세요.</small>"}}
+function renderStudent(){const st=APP.state;if(!st?.myPlayer)return;const p=st.myPlayer;$("student-team").className=`tag ${p.team}`;$("student-team").textContent=p.team==="H"?"홍팀":"청팀";$("student-name").textContent=p.name;$("student-stats").textContent=`내 위치 ${cellLabel(p.pos,st.cols)} · 정답 ${p.correct}/${p.solved}`;$("s-score-h").textContent=st.scores.H.total;$("s-score-c").textContent=st.scores.C.total;renderBoard("student-board",false);if(APP.mode==="solving"||APP.mode==="result")return;const msg=$("student-message");if(st.status==="ended")msg.innerHTML="<b>게임이 종료되었습니다.</b>";else if(st.iAmSkipping)msg.innerHTML="<b>⛈️ 폭풍에 갇혔어요! 이번 턴은 쉽니다.</b>";else if(p.playedThisTurn)msg.innerHTML="<b>이번 턴의 문제를 풀었습니다.</b><br><small>상대 팀 턴이 끝날 때까지 기다려 주세요.</small>";else if(!canPlay()){const why=playBlockReason();msg.innerHTML=why==="시간초과"?"<b>이번 턴 시간이 끝났어요.</b><br><small>다음 턴을 기다려 주세요.</small>":why==="상대팀턴"?"<b>상대 팀 차례예요. 조금만 기다려요.</b>":"<b>선생님이 우리 팀 턴을 시작할 때까지 기다려 주세요.</b>"}else{APP.mode="select";msg.innerHTML="<b>🎯 어디를 공략할까?</b><br><small>내 말의 위·아래·왼쪽·오른쪽 칸을 고르세요.</small>"}}
 // 문제 카드를 그린다. 출처는 언제나 하나여야 한다 — 채점하는 쪽(서버)이 준 문제.
 function renderQuiz(cell,item){
   $("quiz-cell").textContent=cellLabel(cell,APP.state.cols);
@@ -65,10 +112,23 @@ function renderQuiz(cell,item){
   $("quiz-options").innerHTML=item.options.map((x,i)=>`<button class="option" data-choice="${i}"><b>${i+1}</b>${escapeHtml(x)}</button>`).join("");
 }
 function selectCell(cell){
-  if(!canPlay()||APP.mode==="solving")return;
+  // 눌렀는데 아무 일도 안 일어나는 상황을 없앤다. 막혔으면 왜 막혔는지 학생에게 말해 주고
+  // 서버 로그에도 남긴다 — 예전에는 여기서 조용히 return 해서 선생님이 원인을 알 수 없었다.
+  const blocked=playBlockReason();
+  if(blocked||APP.mode==="solving"){
+    reportClient("blocked",{이유:blocked||"풀이중",칸:cellLabel(cell,APP.state?.cols||12),시계차:Math.round(APP.clockOffset/1000)+"초"});
+    if(blocked==="시간초과")toast("이번 턴 시간이 끝났어요. 다음 턴을 기다려 주세요.");
+    else if(blocked==="상대팀턴")toast("지금은 상대 팀 차례예요.");
+    else if(blocked==="이번턴완료")toast("이번 턴 문제는 이미 풀었어요.");
+    else if(blocked==="폭풍쉼")toast("⛈️ 이번 턴은 폭풍으로 쉽니다.");
+    else if(blocked)toast("아직 시작 전이에요. 선생님을 기다려 주세요.");
+    return;
+  }
   if(APP.state.board[cell].o===myTeam()){void call("pickCell",{playerId:APP.playerId,cell}).then(()=>forcePoll(false)).catch(error=>toast(error.message));return}
   const item=APP.myQuizzes[cell];
-  if(!item){toast("문제를 준비하는 중입니다.");forcePoll(true);return}
+  // 배정표에 없는 칸이면 폴링으로는 절대 안 채워진다(이미 비어 있지 않으므로 갱신을 건너뛴다).
+  // 전체 배정표를 다시 받아 온다 — 학생이 나갔다 들어오는 것과 같은 효과다.
+  if(!item){toast("문제를 준비하는 중입니다. 잠시만요…");reportClient("noquiz",{칸:cellLabel(cell,APP.state.cols)});void refreshQuizBank().then(()=>forcePoll(true));return}
   APP.currentCell=cell;APP.mode="solving";
   $("student-message").classList.add("hidden");$("result-card").classList.add("hidden");$("quiz-card").classList.remove("hidden");
   renderQuiz(cell,item);                       // 미리 받아 둔 사본으로 먼저 띄운다(빠르게 보이도록)
@@ -83,7 +143,19 @@ function selectCell(cell){
       return r})
     .catch(error=>{APP.mode="select";hideQuiz();toast(error.message);throw error})
 }
-async function submitChoice(choice){try{await APP.pickPromise;const r=await call("submitAnswer",{playerId:APP.playerId,cell:APP.currentCell,choice});APP.mode="result";hideQuiz();$("result-card").classList.remove("hidden");$("result-big").className=`big ${r.correct?"ok":"no"}`;$("result-big").textContent=r.correct?"정답!":"아쉬워요";$("result-message").textContent=r.correct&&r.bonusSkipped?"정답입니다. 이 칸의 보너스는 이미 받았어요.":`정답은 ${r.answerText}입니다.`;$("result-gain").textContent=r.correct?`+${r.gain}점`:"점령 실패";setTimeout(()=>{APP.mode="waiting";$("result-card").classList.add("hidden");$("student-message").classList.remove("hidden");forcePoll(false)},3000)}catch(error){toast(error.message)}}
+async function submitChoice(choice){
+  // 보기를 두 번 누르면 두 번째 채점이 "문제 정보가 없어요"로 실패한다. 그 실패가 화면을 굳게 했다
+  // (2026-08-06 10:39:53 "정"). 원인 쪽도 막는다 — 한 번 누르면 보기 버튼을 모두 잠근다.
+  if(APP.submitting)return;APP.submitting=true;
+  $("quiz-options").querySelectorAll("button").forEach(b=>{b.disabled=true});
+  try{await APP.pickPromise;const r=await call("submitAnswer",{playerId:APP.playerId,cell:APP.currentCell,choice});APP.mode="result";hideQuiz();$("result-card").classList.remove("hidden");$("result-big").className=`big ${r.correct?"ok":"no"}`;$("result-big").textContent=r.correct?"정답!":"아쉬워요";$("result-message").textContent=r.correct&&r.bonusSkipped?"정답입니다. 이 칸의 보너스는 이미 받았어요.":`정답은 ${r.answerText}입니다.`;$("result-gain").textContent=r.correct?`+${r.gain}점`:"점령 실패";setTimeout(()=>{APP.mode="waiting";$("result-card").classList.add("hidden");$("student-message").classList.remove("hidden");forcePoll(false)},3000)}
+  catch(error){
+    // 채점이 실패해도 반드시 풀이 상태에서 빠져나온다. 예전에는 여기서 mode 가 "solving" 인 채로
+    // 남아 클릭도 폴링도 모두 죽었다 — 그게 "2문제 풀면 멈춘다"의 정체다.
+    toast(error.message);reportClient("submit-fail",{메시지:error.message,칸:APP.currentCell});
+    APP.mode="waiting";hideQuiz();$("student-message").classList.remove("hidden");forcePoll(false);
+  }
+  finally{APP.submitting=false}}
 function hideQuiz(){$("quiz-card").classList.add("hidden")}
 async function cancelQuiz(){try{await call("cancelPick",{playerId:APP.playerId})}catch{}APP.mode="waiting";hideQuiz();$("student-message").classList.remove("hidden");forcePoll(false)}
 

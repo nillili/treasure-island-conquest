@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>보물섬 점령전</title>
+<link rel="stylesheet" href="/style.css?v=1">
+<script src="/net.js?v=1" defer></script>
+<script src="/app.js?v=1" defer></script>
+</head>
+<body>
+<div id="toast" class="toast"></div>
+
+<!-- ① 입장 ------------------------------------------------------------- -->
+<section id="entry" class="entry screen">
+  <div class="entry-title">🏝️ 보물섬 점령전</div>
+  <div class="entry-cards">
+    <button class="entry-card" id="go-student">
+      <span>🙋</span><b>학생 입장</b><small>방번호와 이름을 넣어요</small>
+    </button>
+    <button class="entry-card" id="go-teacher">
+      <span>🧑‍🏫</span><b>선생님</b><small>퀴즈를 올리고 방을 열어요</small>
+    </button>
+  </div>
+</section>
+
+<!-- ② 학생 입장 -------------------------------------------------------- -->
+<div id="student-login" class="dim hidden">
+  <form class="modal" id="student-form">
+    <h2>학생 입장</h2>
+    <div class="field"><label for="in-code">방번호</label>
+      <input class="input" id="in-code" inputmode="numeric" maxlength="4" placeholder="예: 1234" required></div>
+    <div class="field"><label for="in-name">이름</label>
+      <input class="input" id="in-name" maxlength="10" placeholder="이름" required></div>
+    <div id="room-hint" class="hint hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="button muted" data-close="student-login">닫기</button>
+      <button type="submit" class="button primary">들어가기</button>
+    </div>
+  </form>
+</div>
+
+<!-- ③ 선생님 로그인 ---------------------------------------------------- -->
+<div id="teacher-login" class="dim hidden">
+  <form class="modal" id="teacher-form">
+    <h2>선생님 로그인</h2>
+    <div class="field"><label for="in-id">아이디</label>
+      <input class="input" id="in-id" autocomplete="username" required></div>
+    <div class="field"><label for="in-pw">비밀번호</label>
+      <input class="input" id="in-pw" type="password" autocomplete="current-password" required></div>
+    <div id="signup-fields" class="hidden">
+      <div class="field"><label for="in-teacher-name">이름</label>
+        <input class="input" id="in-teacher-name" maxlength="20" placeholder="예: 김선생"></div>
+      <div class="field"><label for="in-signup-code">가입 코드</label>
+        <input class="input" id="in-signup-code" placeholder="학교에서 받은 코드"></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="button muted push" id="toggle-signup">가입하기</button>
+      <button type="button" class="button muted" data-close="teacher-login">닫기</button>
+      <button type="submit" class="button primary" id="teacher-submit">로그인</button>
+    </div>
+  </form>
+</div>
+
+<!-- ④ 선생님 홈 -------------------------------------------------------- -->
+<section id="teacher-home" class="screen hidden">
+  <div class="header">
+    <span class="logo">🏝️ 보물섬</span>
+    <span id="teacher-name"></span>
+    <span class="push"></span>
+    <button class="button muted" id="diagnose">🩺 시스템 점검</button>
+    <button class="button muted" id="logout">로그아웃</button>
+  </div>
+  <div class="home">
+    <div class="card">
+      <h2>📚 퀴즈 보관함</h2>
+      <ul class="quizsets" id="quizsets"></ul>
+      <div class="modal-actions">
+        <a class="button muted push" href="/sample-quiz.csv" download="보물섬_퀴즈_샘플.csv"
+           style="text-decoration:none;display:inline-block">📥 샘플 받기</a>
+        <button class="button muted" id="preview-set">미리보기</button>
+        <button class="button danger" id="delete-set">삭제</button>
+        <button class="button primary" id="upload-open">＋ 엑셀 올리기</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🆕 방 만들기</h2>
+      <div class="field"><label for="cfg-label">반 이름</label>
+        <input class="input" id="cfg-label" maxlength="20" placeholder="예: 3학년 2반"></div>
+      <div class="field"><label>판 크기</label><div class="field-row">
+        <input class="input" id="cfg-rows" type="number" min="10" max="15" value="12">
+        <input class="input" id="cfg-cols" type="number" min="10" max="15" value="12">
+      </div></div>
+      <div class="field"><label for="cfg-time">턴 시간(초)</label>
+        <input class="input" id="cfg-time" type="number" min="10" max="300" value="60"></div>
+      <div class="field"><label for="cfg-round">라운드</label>
+        <input class="input" id="cfg-round" type="number" min="1" max="30" value="10"></div>
+      <div class="field"><label>특수칸 📦⛈️💥</label><div class="field-row">
+        <input class="input" id="cfg-t" type="number" min="0" value="8">
+        <input class="input" id="cfg-s" type="number" min="0" value="7">
+        <input class="input" id="cfg-a" type="number" min="0" value="7">
+      </div></div>
+      <div id="size-hint" class="hint"></div>
+      <div class="modal-actions">
+        <button class="button primary" id="create-room">방 만들기</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🚪 열려 있는 내 방</h2>
+      <div class="roomlist" id="roomlist"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ⑤ 업로드 ----------------------------------------------------------- -->
+<div id="upload-modal" class="dim hidden">
+  <form class="modal" id="upload-form">
+    <h2>엑셀 올리기</h2>
+    <div class="hint">첫 줄은 머리글입니다 — <b>질문 · 정답 · 예제1~4</b>.
+      정답은 숫자(1~4)로 적어 주세요. 최대 80문항.<br>
+      <a href="/sample-quiz.csv" download="보물섬_퀴즈_샘플.csv">📥 샘플 파일 받기</a> —
+      이걸 열어 내용만 바꾸면 형식이 어긋날 일이 없습니다.</div>
+    <div class="field"><label for="up-title">퀴즈 이름</label>
+      <input class="input" id="up-title" maxlength="20" placeholder="예: 국어1" required></div>
+    <div class="field"><label for="up-file">파일</label>
+      <input class="input" id="up-file" type="file" accept=".xlsx,.csv" required></div>
+    <div id="upload-problems" class="problems hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="button muted" data-close="upload-modal">닫기</button>
+      <button type="submit" class="button primary">올리기</button>
+    </div>
+  </form>
+</div>
+
+<!-- ⑥ 미리보기 / 방번호 알림 ------------------------------------------- -->
+<div id="info-modal" class="dim hidden">
+  <div class="modal wide">
+    <h2 id="info-title"></h2>
+    <div id="info-body"></div>
+    <div class="modal-actions">
+      <button class="button primary" data-close="info-modal">확인</button>
+    </div>
+  </div>
+</div>
+
+<!-- ⑦ 학생 게임 화면 --------------------------------------------------- -->
+<section id="student-screen" class="screen hidden">
+  <div class="header">
+    <span class="quiz-badge">📘 <span id="s-quiz">-</span></span>
+    <span class="tag" id="s-team">-</span>
+    <span id="s-name"></span>
+    <span class="push"></span>
+    <span class="net" id="s-net">연결 중…</span>
+    <button class="button muted" data-leave>나가기</button>
+  </div>
+  <div class="layout student-layout">
+    <div class="student-grid">
+      <div class="main">
+        <div class="panel">
+          <div class="bar">
+            <b class="score-H">홍 <span id="s-score-h">0</span></b>
+            <b class="score-C">청 <span id="s-score-c">0</span></b>
+            <span class="spacer"></span>
+            <span id="s-stats"></span>
+            <b class="timer" id="s-timer">00:00</b>
+          </div>
+          <div class="board-wrap"><div id="student-board" class="board"></div></div>
+        </div>
+      </div>
+      <div class="sidebar">
+        <div class="card notice" id="student-message"></div>
+        <div class="card quiz hidden" id="quiz-card">
+          <h3>🎯 <span id="quiz-cell"></span></h3>
+          <h2 id="quiz-question"></h2>
+          <div class="options" id="quiz-options"></div>
+          <button class="button muted top-gap" id="quiz-cancel">그만두기</button>
+        </div>
+        <div class="card result hidden" id="result-card">
+          <div class="big" id="result-big"></div>
+          <div id="result-message"></div>
+          <b id="result-gain"></b>
+        </div>
+        <div class="card">
+          <h3>칸 종류</h3>
+          <div class="legend">
+            <div><span>❓</span>아직 모름</div>
+            <div><span>📦</span>보물 +2</div>
+            <div><span>⛈️</span>폭풍 쉼</div>
+            <div><span>💥</span>공격</div>
+            <div><span>🚩</span>보통</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>이번 판 기록</h3>
+          <div id="s-log"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ⑧ 선생님 게임 화면 ------------------------------------------------- -->
+<section id="admin-screen" class="screen hidden">
+  <div class="header">
+    <span class="quiz-badge">📘 <span id="a-quiz">-</span></span>
+    <span id="a-room"></span>
+    <span class="push"></span>
+    <span class="net" id="a-net">연결 중…</span>
+    <button class="button muted" id="back-home">⚙ 설정</button>
+  </div>
+  <div class="layout admin-layout">
+    <div class="admin-main">
+      <div class="panel">
+        <div class="bar">
+          <span class="tag" id="a-turn">대기</span>
+          <span>라운드 <b id="a-round">0 / 0</b></span>
+          <span class="spacer"></span>
+          <b class="timer" id="a-timer">00:00</b>
+        </div>
+        <div class="board-wrap"><div id="admin-board" class="board"></div></div>
+      </div>
+    </div>
+    <div class="sidebar">
+      <div class="card scores">
+        <div class="team score-H">홍팀 <b id="a-score-h">0</b></div>
+        <small id="a-sub-h"></small>
+        <div class="team score-C">청팀 <b id="a-score-c">0</b></div>
+        <small id="a-sub-c"></small>
+      </div>
+      <div class="card">
+        <h3>학생 <span id="online-count"></span></h3>
+        <div class="roster" id="roster"></div>
+      </div>
+      <div class="card">
+        <div class="turn-hint" id="turn-hint"></div>
+        <div class="buttons">
+          <button class="button muted" id="new-game-button">🆕 새 게임</button>
+          <button class="button primary" id="turn-button">▶ 시작</button>
+          <button class="button muted" id="end-game-button">종료</button>
+          <button class="button danger" id="reset-button">🧹 초기화</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>이번 판 기록</h3>
+        <div id="a-log"></div>
+      </div>
+    </div>
+  </div>
+</section>
+</body>
+</html>

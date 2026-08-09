@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "treasure-island-v2",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-03",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // /api/* 는 정적 자산보다 Worker 가 먼저 본다. 이게 없으면 라우터에 도달하지 못한다.
+    "run_worker_first": ["/api/*"]
+  },
+
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "RoomDO" }]
+  },
+  // new_classes 가 아니라 new_sqlite_classes 여야 ctx.storage.sql 을 쓸 수 있다.
+  // 한 번 만들면 나중에 바꿀 수 없으므로 첫 배포 전에 반드시 확인한다.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO"] }],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "treasure",
+      "database_id": "e8c1a648-ab37-48e6-be80-91524778e418"
+    }
+  ],
+
+  "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } }
+}

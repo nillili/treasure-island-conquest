@@ -1,66 +1,165 @@
 # 보물섬 점령전
 
-Cloudflare Workers에서 운영하고 Google Spreadsheet를 데이터베이스로 사용하는 교실용 팀 대전 퀴즈 웹앱입니다.
+교실용 팀 대전 퀴즈 보드게임. 홍팀·청팀으로 나뉘어 문제를 맞히며 땅을 넓힌다.
 
-## 구조
+지금 **두 벌**이 있다.
 
-- `cloudflare/`: 학생·관리자 웹앱, `/api` 프록시, Cloudflare 배포 설정
-- `apps-script/Backend.gs`: 스프레드시트 DB에 접근하는 전체 JSON API 백엔드 단일 파일
-- `apps-script/appsscript.json`: Apps Script 실행 설정 파일
-- `sample/퀴즈_샘플_v3.csv`: 50개 예시 문제 (4지선다, 정답은 번호)
-- `docs/PROJECT_SPEC.md`: 코드를 정본으로 삼는 설계도 — 기능 요구사항·데이터 모델·데이터 흐름
-- `docs/DEPLOY.md`: Apps Script와 Cloudflare 배포 방법
-- `tools/`: 배포 확인(`check-state.py`)·수업 후 로그 분석(`fetch-log.py`)
-- `img/보물섬배경화면.png`: 원본 배경 이미지
+| | 주소 | 백엔드 | 상태 |
+|---|---|---|---|
+| **v2** | `treasure-island-v2` | Cloudflare Durable Objects + D1 | **새로 쓴 것.** 여러 반이 동시에, 선생님마다 자기 퀴즈로 |
+| v1 | `treasure-island-conquest` | Google Apps Script + 스프레드시트 | 지금까지 쓰던 것. 그대로 둔다 |
+
+v2 가 자리 잡을 때까지 둘 다 살려 둔다. 수업 중 사고가 나면 v1 로 바로 돌아갈 수 있다.
+
+---
 
 ## 게임 규칙
 
-- 홍팀·청팀으로 나뉘어 12×12 지도의 칸을 점령한다. 칸마다 다른 문제가 숨어 있다.
+- 홍팀·청팀으로 나뉘어 지도의 칸을 점령한다. 칸마다 다른 문제가 숨어 있다.
 - 학생은 자기 말 **둘레 8칸(대각선 포함)** 중 아군 칸이 아닌 곳에 도전한다.
-- 한 턴에 한 문제. 맞히면 그 칸을 점령하고 말이 이동한다.
-- 특수칸: 📦 보물(+2) · ⛈️ 폭풍(다음 턴 쉼) · 💥 공격(상대 칸 1개 빼앗음)
+- **한 턴에 한 문제.** 맞히면 그 칸을 점령하고 말이 그리로 옮겨 간다.
+- 특수칸은 **점령해야 정체가 드러난다** — 미리 보이면 보물칸만 노린다.
+  - 📦 보물 `+2점` (같은 팀은 한 번만)
+  - ⛈️ 폭풍 `다음 턴 쉼`
+  - 💥 공격 `상대 칸 하나를 빼앗음`
 - 점수 = 점령한 칸 수 + 보너스
 
-## 수업 진행
+---
+
+## v2 — 지금 쓰는 것
+
+### 선생님
 
 ```
-0. ⚙ 환경설정 → 🩺 시스템 점검     문제가 없는지 먼저 확인
-1. 학생 입장                       명단에서 인원 확인, 중복은 × 로 정리
-2. 🆕 새 게임                      보드에 인원수만큼 색이 칠해진다
-3. ▶ 시작  →  다음 턴              시간이 지나면 자동으로도 넘어간다
-4. 종료                            승패 확정 + 스프레드시트에 기록
+1. [선생님] → 로그인 (처음이면 [가입하기] + 학교 가입 코드)
+2. ⚙ 설정 → 🩺 시스템 점검      수업 전에 한 번
+3. 📚 퀴즈 보관함에서 하나 선택   (가입하면 상식 샘플 50문항이 들어 있다)
+4. 🆕 방 만들기 → 방번호 4자리를 학생들에게 알려 준다
+5. [들어가기] → 🆕 새 게임 → ▶ 시작 → 다음 턴 …
+6. 종료 → 결과가 그 자리에서 뜬다 (남기지 않는다)
 ```
 
-`🧹 초기화`는 학생 명단까지 비우고 새 판을 깐다. 다음 반 수업을 시작할 때 쓴다.
+- **칸을 누르면** 그 칸의 문제와 정답이 보인다. 정답이 그대로 보이니 교실 TV 에 띄운 채로는 열지 않는다.
+- **💣 폭파** — 방을 닫는다. 학생들도 함께 나가고 입장 화면으로 돌아간다.
+- 판은 **10×10 ~ 15×15**, 문항은 **최대 80개**(넘으면 앞에서부터 80개만 쓰고 몇 개를 건너뛰었는지 알려 준다).
 
-## 버전
+### 퀴즈 파일
 
-`Backend.gs`의 `BACKEND_VERSION`과 `app.js`의 `APP_VERSION`은 **항상 같아야 한다.**
-다르면 배포가 어긋난 것이고, [시스템 점검]이 이것부터 잡아낸다.
+엑셀(`.xlsx`)을 **그대로** 올린다. CSV 로 바꿀 필요 없다.
+
+| 질문 | 정답 | 예제1 | 예제2 | 예제3 | 예제4 |
+|---|---|---|---|---|---|
+| 고조선을 세운 인물은 누구인가요? | 1 | 단군왕검 | 온조 | 박혁거세 | 주몽 |
+
+첫 줄은 머리글. **정답은 번호**(1~4)로 적는다. 보기는 2~4개, 뒤쪽 빈 칸은 알아서 잘린다.
+보관함의 **[📥 샘플 받기]** 로 내려받아 내용만 바꾸면 형식이 어긋날 일이 없다.
+
+### 학생
+
+방번호 4자리 + 이름. 끝. 새로고침해도 하던 자리로 돌아온다.
+
+### 수업 중 지켜보기
 
 ```bash
-python3 tools/check-state.py           # 배포된 서버 버전 확인
-python3 tools/check-state.py <비번>     # 학생 배치까지 확인
+cd cloudflare-v2
+node tools/watch.mjs --room 1234 --id 내아이디 --pw 내비밀번호 --save
 ```
 
-Cloudflare 배포본은 원본 이미지를 복사한 `cloudflare/public/assets/treasure-island-bg.png`를 실제 화면 배경으로 사용합니다.
+선생님 자격으로 붙어 학생들이 보는 것과 같은 것을 본다.
+**요청이 오지 않는 것 자체를 증상으로 잡는다** — 멈춘 화면은 서버에 아무것도 안 보내므로 서버 로그로는 보이지 않는다.
+
+```
+[10:23:41] running · R7/10 · 홍팀 · 남은 18초 · 홍 12 : 청 9 · 접속 15/16
+  이름       팀  위치  도전가능 마지막   상태
+  유진       홍  B10   2        3초      정상
+  수경       홍  F5    8        2분18초  ⛔ 자기 팀 턴 2회 조용함
+  >>> 수경: 나갔다 다시 들어오게 하세요(F5 → 이름 재입력)
+```
+
+---
 
 ## 개발
 
 ```bash
-cd cloudflare
+cd cloudflare-v2
 npm install
-npm run check
-npm run dev
+npm run types                  # worker-configuration.d.ts 를 만든다 (커밋하지 않는다)
+cp .dev.vars.example .dev.vars # SIGNUP_CODE 를 정한다
+npm run db:local               # 로컬 D1 에 스키마 적용
+npm run dev                    # http://localhost:8787
 ```
 
-상세 설정과 배포 순서는 [docs/DEPLOY.md](docs/DEPLOY.md)를 따릅니다.
+```bash
+npm test                       # 자동 테스트 135개
+npm run check                  # 타입 + 배포 예행
+SIGNUP_CODE=... npm run play   # 실제로 한 판 해 본다 (사람 없이)
+```
+
+`npm run play` 는 브라우저가 하는 그대로 WebSocket 으로 붙어 한 판을 끝까지 한다.
+**문제-정답 어긋남 0 · 재시도 중복 반영 0 · 순번 건너뜀 0** 을 확인한다.
+
+### 배포
+
+```bash
+npx wrangler d1 migrations apply treasure --remote   # --remote 를 빼먹기 쉽다
+printf '가입코드' | npx wrangler secret put SIGNUP_CODE
+npx wrangler deploy
+```
+
+---
+
+## 구조
+
+```
+cloudflare-v2/
+  src/index.ts       라우터. 쿠키 → teacherId 경계도 여기서
+  src/auth.ts        가입 · 로그인 · 세션
+  src/quizsets.ts    퀴즈 보관함 (모든 조회에 teacher_id 조건)
+  src/rooms.ts       방 개설 — D1 예약이 먼저, DO 초기화가 나중
+  src/room.ts        RoomDO — 방 하나가 곧 서버 하나
+  src/game.ts        게임 규칙 (순수 함수. Backend.gs 에서 이식)
+  src/quiz.ts        문항 파서   src/xlsx.ts  엑셀 읽기 (라이브러리 없음)
+  src/diagnose.ts    시스템 점검
+  public/            화면. net.js 가 연결·재연결·폴백을 맡는다
+  tools/             watch.mjs (수업 감시) · playtest.mjs (자동 플레이)
+
+docs/plan_DB로전환_v3.md   설계와 구현 현황
+docs/PROJECT_SPEC.md       v1(앱스크립트) 설계도
+docs/DEPLOY.md             v1 배포 방법
+```
+
+**방 하나 = Durable Object 하나.** 방번호로 곧장 찾아가고, 방끼리 서로 밀지 않는다.
+게임이 도는 동안의 정본은 그 방의 SQLite 다. D1 은 로그인·보관함·방 목록만 맡는다.
+
+### 화면이 지키는 규칙
+
+이 프로젝트에서 난 사고의 절반이 이걸 안 지켜서 생겼다.
+
+1. **화면은 아무것도 기억하지 않는다.** 문제도 미리 받아 두지 않고, 칸을 고른 그 순간 서버가 보내 준다.
+2. **`stateRev` 가 건너뛰면 전체를 다시 받는다.** 중복은 그냥 무시한다.
+3. **변경 명령에는 `actionId`.** 다시 보낼 때 같은 값을 쓰면 서버가 한 번만 반영한다.
+4. **선생님 버튼은 절대 비활성화하지 않는다.** 눌러도 반응 없는 버튼 앞에서 교사가 할 수 있는 일이 없어진다.
+5. **막히면 왜 막혔는지 말한다.**
+
+---
+
+## v1 (앱스크립트판)
+
+지금까지 쓰던 것. `apps-script/` + `cloudflare/`.
+설계는 [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md), 배포는 [docs/DEPLOY.md](docs/DEPLOY.md).
+
+```bash
+python3 tools/check-state.py <관리자비번>   # 배포·학생 배치 확인
+python3 tools/watch.py <관리자비번>          # 수업 중 감시
+python3 tools/fetch-log.py <관리자비번>      # 수업 후 로그 분석
+```
+
+`Backend.gs` 의 `BACKEND_VERSION` 과 `app.js` 의 `APP_VERSION` 은 **항상 같아야 한다.**
+
+---
 
 ## 보안 경계
 
-- 브라우저는 같은 출처 `/api/*`만 호출합니다.
-- Cloudflare Worker만 Apps Script URL과 공유 비밀을 사용합니다.
-- Apps Script만 스프레드시트에 접근합니다.
-- `_상태`와 `_퀴즈스냅샷`에는 문제 배치와 정답이 있으므로 스프레드시트를 학생에게 공유하지 않습니다.
-
-삼각형 자동 점령은 현재 구현 범위에 포함되지 않습니다.
+- 브라우저는 같은 출처 `/api/*` 만 호출한다.
+- 선생님 세션은 `HttpOnly` 쿠키로만 오간다. 화면 JS 는 토큰을 읽지 않는다.
+- 학생에게는 정답을 보내지 않는다. **채점하는 곳이 하나여야 문제와 정답이 어긋나지 않기 때문**이다.

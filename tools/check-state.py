@@ -59,7 +59,7 @@ def main():
     with urllib.request.urlopen(url, timeout=30) as res:
         info = json.loads(res.read().decode())
     print(f"배포: version {info.get('version')} · 이동 {info.get('move')} · 점검 {info.get('diagnose')}")
-    expected = 18  # app.js 의 APP_VERSION 과 같아야 한다
+    expected = 19  # app.js 의 APP_VERSION 과 같아야 한다
     if info.get("version") != expected:
         print(f"⚠ 서버가 v{info.get('version')} 입니다. 화면은 v{expected} 이므로 Apps Script를 다시 배포해 주세요.")
 

@@ -15,13 +15,14 @@ function jsonOutput_(value) {
 
 // 화면(app.js)의 APP_VERSION 과 이 값이 다르면 배포가 어긋난 것이다.
 // 2026-08-05 시연이 바로 그 어긋남으로 무너졌으므로 [시스템 점검]이 이것부터 확인한다.
-var BACKEND_VERSION = 18;
+var BACKEND_VERSION = 19;
 var MOVE_RULE = '8way';
 
 function doGet() {
   // 배포 확인용. curl <웹앱URL> 한 번으로 무엇이 올라가 있는지 알 수 있다.
   return jsonOutput_({ ok:true, service:'보물섬점령전 API', version:BACKEND_VERSION,
-    placement:'random', rescue:true, eventlog:true, move:MOVE_RULE, safeBackup:true, diagnose:true });
+    placement:'random', rescue:true, eventlog:true, move:MOVE_RULE, safeBackup:true, diagnose:true,
+    serverNow:Date.now(), clientLog:true });
 }
 
 function doPost(e) {
@@ -36,7 +37,7 @@ function doPost(e) {
       adminNewGame:adminNewGame, adminNextTurn:adminNextTurn, adminEndGame:adminEndGame,
       adminKick:adminKick, adminPeekCell:adminPeekCell,
       adminGetConfig:adminGetConfig, adminSaveConfig:adminSaveConfig, adminGetLog:adminGetLog, adminRestore:adminRestore,
-      adminDiagnose:adminDiagnose, adminRepair:adminRepair
+      adminDiagnose:adminDiagnose, adminRepair:adminRepair, clientLog:clientLog
     };
     if (!handlers[action]) throw new Error('허용되지 않은 작업입니다.');
     var started = Date.now(), out = handlers[action](payload);
@@ -61,6 +62,33 @@ function requireAdmin_(token) {
   }
 }
 
+/**
+ * 학생 화면이 스스로 보내는 진단 신호를 로그에 남긴다.
+ *
+ * 서버 로그만으로는 "화면이 멈췄다"를 절대 볼 수 없다. 멈춘 화면은 요청 자체를 안 보내므로
+ * 서버에는 아무 흔적이 없다(2026-08-06: 한 학생이 21분 동안 요청 0건이었다).
+ * 그래서 화면이 스스로 "나 지금 이래서 못 누른다"를 알려 주게 했다.
+ * 게임 진행에는 아무 영향이 없고, 실패해도 조용히 무시한다.
+ */
+function clientLog(arg) {
+  try {
+    arg = arg || {};
+    var tag = String(arg.tag || '?').slice(0, 24);
+    var pid = String(arg.playerId || '');
+    // 폴링마다 쌓이면 로그가 못 쓰게 된다. 학생·태그별로 8초에 한 번만 받는다.
+    var cache = CacheService.getScriptCache(), key = 'CLOG:' + pid.slice(-6) + ':' + tag;
+    if (cache.get(key)) return { ok:true, skipped:true };
+    cache.put(key, '1', 8);
+    var st = loadState_(true), p = pid ? st.players[pid] : null;
+    var row = { tag:tag, pid:pid.slice(-6) };
+    if (p) { row.name = p.name; row.team = p.team; row.cell = p.pos; }
+    var info = arg.info || {};
+    Object.keys(info).slice(0, 8).forEach(function (k) { row[k] = String(info[k]).slice(0, 60); });
+    logEvent_('client', row);
+    return { ok:true };
+  } catch (e) { return { ok:true, ignored:true }; }
+}
+
 function joinAsStudent(arg) {
   try {
     arg = arg || {};
@@ -70,7 +98,7 @@ function joinAsStudent(arg) {
       if (existing) {
         touchPresence_(existingState.gameId, requestedId);
         return { ok:true, playerId:requestedId, team:existing.team, pos:existing.pos, name:existing.name,
-          allQuizzes:allCellQuizzes_(existingState) };
+          serverNow:Date.now(), allQuizzes:allCellQuizzes_(existingState) };
       }
     }
     var name = String(arg.name || '').trim();
@@ -89,6 +117,7 @@ function joinAsStudent(arg) {
       return { ok:true, playerId:id, team:team, pos:p.pos, name:name };
     });
     var joinedState = loadState_();
+    result.serverNow = Date.now();
     result.allQuizzes = allCellQuizzes_(joinedState);
     touchPresence_(joinedState.gameId, result.playerId);
     return result;
@@ -1024,12 +1053,15 @@ function getState(arg) {
       }
     }
     var same = Number(arg.rev) === st.rev;
+    // serverNow — 화면은 이 값으로 자기 시계와의 차이를 재서 남은 시간을 계산한다.
+    // 학생 컴퓨터 시계가 앞서 있으면 "턴이 이미 끝났다"고 잘못 판단해 아무것도 못 누르게 된다.
     if (same) return { ok:true, nochange:true, rev:st.rev, endsAt:st.turnEndsAt, myQuizzes:quizzes,
+      serverNow:Date.now(),
       iAmSkipping:p ? p.skipTurnKey === turnKey_(st) : false, presence:admin ? getPresence_(st) : undefined };
     // gameId 를 반드시 함께 보낸다. 화면은 이 값이 바뀌면 들고 있던 문제 배정표를 버리고 새로 받는다.
     // 이게 없어서, [새 게임] 뒤에도 학생 화면이 옛 배정표로 문제를 보여 주고
     // 서버는 새 배정표로 채점하는 일이 생겼다(2026-08-05: 정답을 눌러도 오답 처리).
-    return { ok:true, gameId:st.gameId, rev:st.rev, status:st.status, rows:st.rows, cols:st.cols, round:st.round,
+    return { ok:true, gameId:st.gameId, rev:st.rev, serverNow:Date.now(), status:st.status, rows:st.rows, cols:st.cols, round:st.round,
       roundLimit:st.roundLimit, turnTeam:st.turnTeam, turnEndsAt:st.turnEndsAt, scores:totals_(st),
       board:admin ? st.board : maskBoard_(st), players:publicPlayers_(st), cellLocks:st.cellLocks,
       myPlayer:p ? {name:p.name,team:p.team,pos:p.pos,solved:p.solved,correct:p.correct,

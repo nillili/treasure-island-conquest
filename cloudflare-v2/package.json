@@ -1,0 +1,23 @@
+{
+  "name": "treasure-island-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit && wrangler deploy --dry-run",
+    "test": "vitest run",
+    "types": "wrangler types",
+    "db:local": "wrangler d1 migrations apply treasure --local",
+    "db:remote": "wrangler d1 migrations apply treasure --remote",
+    "play": "node tools/playtest.mjs",
+    "watch": "node tools/watch.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.20.3",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.118.0"
+  }
+}
