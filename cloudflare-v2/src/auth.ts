@@ -6,6 +6,7 @@
  * (docs/plan_DB로전환_v3.md 2-6).
  */
 import { fail, json, readJson, str } from "./http";
+import { sweepStaleRooms } from "./sweep";
 import { seedSampleQuiz } from "./quizsets";
 
 const COOKIE = "tsession";
@@ -79,6 +80,10 @@ async function startSession(request: Request, env: Env, teacherId: string): Prom
     ).bind(token, teacherId, now, now + SESSION_MS),
     env.DB.prepare("UPDATE teachers SET last_login_at = ? WHERE id = ?").bind(now, teacherId),
   ]);
+  // 어제 방도 여기서 함께 치운다. 상주하는 데몬이 없어서 누군가 들어오는 순간이 유일한 기회다.
+  // 치울 게 없으면 SELECT 한 번이라 로그인이 느려지지 않는다.
+  await sweepStaleRooms(env);
+
   const teacher = await env.DB.prepare("SELECT id, display_name FROM teachers WHERE id = ?")
     .bind(teacherId)
     .first<{ id: string; display_name: string }>();

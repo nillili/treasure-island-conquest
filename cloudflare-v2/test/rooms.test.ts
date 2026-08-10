@@ -1,6 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import { startOfTodayKST } from "../src/sweep";
 
 const CODE = "테스트가입코드";
 const BASE = "https://t.test";
@@ -200,5 +201,99 @@ describe("퀴즈 사본", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ quizTitle: "국어1" });
     expect(await env.ROOM.getByName(code).quizCount()).toBe(50);
+  });
+});
+
+/**
+ * 어제 방 자동 청소.
+ *
+ * 상주하는 데몬이 없어서 **선생님이 들어오는 순간이 유일한 청소 기회**다.
+ * 그래서 "누가 들어왔을 때 실제로 치워졌는가"를 확인한다.
+ */
+describe("어제 방 자동 청소", () => {
+  const login = (id: string) =>
+    SELF.fetch(`${BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, password: "pw1234" }),
+    });
+
+  /** 방을 하나 만들고 방번호를 돌려준다. */
+  async function openRoom(who: string) {
+    const c = await signupOk(who);
+    const q = await uploadQuiz(c, `퀴즈_${who}`);
+    const res = await makeRoom(c, { requestId: crypto.randomUUID(), quizSetId: q });
+    return { cookie: c, code: ((await res.json()) as { code: string }).code };
+  }
+
+  /** D1 의 created_at 을 과거로 돌린다. 하루를 실제로 기다릴 수는 없다. */
+  const backdate = (code: string, at: number) =>
+    env.DB.prepare("UPDATE rooms SET created_at = ? WHERE code = ?").bind(at, code).run();
+
+  const statusOf = (code: string) =>
+    env.DB.prepare("SELECT status FROM rooms WHERE code = ?")
+      .bind(code)
+      .first<{ status: string }>()
+      .then((r) => r?.status);
+
+  it("한국 시각 오늘 0시를 기준으로 삼는다", () => {
+    // 한국 0시 정각과 그 1분 뒤는 같은 날이어야 한다(전날로 밀리면 멀쩡한 방이 닫힌다).
+    const kstMidnight = Date.UTC(2026, 7, 9, 15, 0, 0); // = 2026-08-10 00:00 KST
+    expect(startOfTodayKST(kstMidnight)).toBe(kstMidnight);
+    expect(startOfTodayKST(kstMidnight + 60_000)).toBe(kstMidnight);
+    // 1초 전은 전날이다
+    expect(startOfTodayKST(kstMidnight - 1000)).toBe(kstMidnight - 86_400_000);
+  });
+
+  it("어제 만든 방은 로그인하는 순간 닫힌다", async () => {
+    const { code } = await openRoom("sweep1");
+    await backdate(code, startOfTodayKST() - 1000); // 어제 23:59:59
+    expect(await statusOf(code)).toBe("ready");
+
+    await login("sweep1");
+
+    expect(await statusOf(code)).toBe("closed");
+    expect((await SELF.fetch(`${BASE}/api/rooms/${code}`)).status).toBe(404);
+  });
+
+  it("오늘 만든 방은 건드리지 않는다", async () => {
+    const { code } = await openRoom("sweep2");
+    await backdate(code, startOfTodayKST() + 1000); // 오늘 00:00:01
+    await login("sweep2");
+    expect(await statusOf(code)).toBe("ready");
+  });
+
+  it("만든 사람이 누구든 상관없이 닫는다", async () => {
+    const { code } = await openRoom("sweep3");
+    await backdate(code, startOfTodayKST() - 1000);
+
+    await signupOk("sweep4"); // 다른 선생님이 들어와도 치워진다
+    expect(await statusOf(code)).toBe("closed");
+  });
+
+  it("선생님 홈을 열 때도 치운다", async () => {
+    const { cookie: c, code } = await openRoom("sweep5");
+    await backdate(code, startOfTodayKST() - 1000);
+
+    await SELF.fetch(`${BASE}/api/rooms/mine`, { headers: { cookie: c } });
+    expect(await statusOf(code)).toBe("closed");
+  });
+
+  it("방 안에 있던 학생은 다시 붙을 수 없다", async () => {
+    const { code } = await openRoom("sweep6");
+    const rpc = (body: unknown) =>
+      SELF.fetch(`${BASE}/api/rooms/${code}/rpc`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    expect((await rpc({ t: "hello", role: "student", name: "민수" })).status).toBe(200);
+
+    await backdate(code, startOfTodayKST() - 1000);
+    await login("sweep6");
+
+    // 방이 통째로 사라졌으니 같은 번호로 다시 들어올 수도 없다.
+    const again = (await (await rpc({ t: "hello", role: "student", name: "민수" })).json()) as { code?: string };
+    expect(again.code).toBe("no-room");
   });
 });

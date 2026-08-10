@@ -1,8 +1,8 @@
 /**
  * 수업이 도는 동안 실시간으로 지켜본다.
  *
- *   node tools/watch.mjs --room 1234 --id 내아이디 --pw 내비밀번호
- *   node tools/watch.mjs --room 1234 --id 내아이디 --pw 내비밀번호 --save
+ *   node tools/watch.mjs --room 1234            (계정은 .dev.vars 에서 읽는다)
+ *   node tools/watch.mjs --room 1234 --save    (logs/ 에 기록도 남긴다)
  *
  * 선생님 자격으로 방에 붙어, 학생 화면이 보는 것과 같은 것을 본다.
  * 서버 로그로는 "화면이 멈췄다"를 볼 수 없다 — 멈춘 화면은 요청 자체를 안 보내기 때문이다.
@@ -14,7 +14,7 @@
  *
  * Ctrl+C 로 끝낸다.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -22,14 +22,33 @@ const arg = (name, fallback) => {
 };
 const has = (name) => process.argv.includes(`--${name}`);
 
+/**
+ * 계정은 .dev.vars 에서 읽는다(이 파일은 저장소에 안 올라간다).
+ * 비밀번호를 명령줄에 적으면 셸 기록과 화면에 그대로 남는다.
+ *
+ *   WATCH_ID=내아이디
+ *   WATCH_PW=내비밀번호
+ */
+function fromDevVars(key) {
+  try {
+    const text = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8");
+    const line = text.split(/\r?\n/).find((l) => l.trim().startsWith(`${key}=`));
+    return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "") : "";
+  } catch {
+    return "";
+  }
+}
+
 const BASE = arg("base", "https://treasure-island-v2.ds1lph.workers.dev");
 const ROOM = arg("room", "");
-const ID = arg("id", "");
-const PW = arg("pw", "");
-const SAVE = has("save");
+const ID = arg("id", "") || process.env.WATCH_ID || fromDevVars("WATCH_ID");
+const PW = arg("pw", "") || process.env.WATCH_PW || fromDevVars("WATCH_PW");
+const SAVE = has("save") || !!arg("every", "");
 
 if (!ROOM || !ID || !PW) {
-  console.log("사용법: node tools/watch.mjs --room 1234 --id 아이디 --pw 비밀번호 [--base 주소] [--save]");
+  console.log("사용법: node tools/watch.mjs --room 1234 [--base 주소] [--every 5] [--save]");
+  console.log("계정은 cloudflare-v2/.dev.vars 의 WATCH_ID · WATCH_PW 에서 읽습니다.");
+  console.log("(--id · --pw 로 직접 줄 수도 있지만 셸 기록에 남습니다)");
   process.exit(1);
 }
 

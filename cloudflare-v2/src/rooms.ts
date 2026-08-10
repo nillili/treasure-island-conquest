@@ -12,6 +12,7 @@ import { requireTeacher, teacherFromCookie } from "./auth";
 import { MAX_SIDE, MIN_SIDE, checkBoardSize } from "./game";
 import { fail, json, readJson, str } from "./http";
 import { loadQuizSet } from "./quizsets";
+import { sweepStaleRooms } from "./sweep";
 
 const CODE_TRIES = 20;
 const PROVISION_STALE_MS = 10 * 60 * 1000; // 이보다 오래 준비 중인 방번호는 회수한다
@@ -187,6 +188,9 @@ async function checkRoom(env: Env, code: string): Promise<Response> {
 async function myRooms(request: Request, env: Env): Promise<Response> {
   const teacherId = await requireTeacher(request, env);
   if (teacherId instanceof Response) return teacherId;
+
+  // 한 번 로그인해 두고 며칠 쓰는 선생님도 있다. 홈을 열 때마다 어제 방을 치운다.
+  await sweepStaleRooms(env);
 
   const { results } = await env.DB.prepare(
     `SELECT code, label, quiz_title, created_at, last_active_at

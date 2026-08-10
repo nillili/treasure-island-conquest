@@ -609,7 +609,12 @@ export class RoomDO extends DurableObject<Env> {
 
   private async closeRoom(): Promise<void> {
     const room = this.room();
-    if (!room) return;
+    if (!room) {
+      // 방 정보가 없는데 여기까지 왔다 = 없는 방번호를 누가 건드려 빈 DO 가 깨어난 것이다.
+      // 생성자가 만들어 둔 빈 표까지 지워서 껍데기를 남기지 않는다.
+      await this.ctx.storage.deleteAll();
+      return;
+    }
     this.sql.exec("UPDATE room SET status = 'closing' WHERE id = 1");
     try {
       await this.env.DB.prepare(
@@ -1132,6 +1137,12 @@ export class RoomDO extends DurableObject<Env> {
   // ── WebSocket ───────────────────────────────────────────────────────────
 
   async fetch(request: Request): Promise<Response> {
+    // 방을 닫을 때 deleteAll() 로 표까지 지운다. 그런데 같은 DO 인스턴스가 메모리에 남아 있으면
+    // 생성자가 다시 돌지 않아서, 그 뒤에 오는 요청은 "no such table" 이라는 날 SQL 오류로 죽는다.
+    // 학생 화면에는 그게 code:"unknown" 으로 뜬다 — 왜 안 되는지 알 길이 없다.
+    // 멱등이고 값싼 호출이라 여기서 한 번 보장한다. 그러면 "그런 방이 없어요" 로 제대로 답한다.
+    this.ensureSchema();
+
     const url = new URL(request.url);
     const teacherAtUpgrade = request.headers.get("x-teacher-id") || null;
 
