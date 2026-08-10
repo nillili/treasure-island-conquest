@@ -81,6 +81,7 @@ class Client {
       Object.assign(this.state, {
         status: msg.status, round: msg.round, turnTeam: msg.turnTeam,
         turnEndsAt: msg.turnEndsAt, players: msg.players, cellLocks: msg.cellLocks,
+        turnFx: msg.turnFx,
       });
       if (this.state.myPlayer) {
         const mine = msg.players.find((p) => p.id === this.id);
@@ -130,7 +131,41 @@ function pickable(state) {
 
 let ROOM = "";
 
-const stats = { picked: 0, answered: 0, correct: 0, wrongGraded: 0, dupIgnored: 0, gaps: 0, errors: {} };
+const stats = { picked: 0, answered: 0, correct: 0, wrongGraded: 0, dupIgnored: 0, gaps: 0, fxChecked: 0, fxWrong: 0, errors: {} };
+
+/**
+ * 3D 무대에 올라갈 턴 요약이 실제 채점과 맞는지 본다.
+ *
+ * 여기서 잡으려는 것은 하나다 — 점수는 +1 만 올랐는데 화면이 "보물 +2"라고 하거나,
+ * 빼앗은 땅이 없는데 "상대 땅을 빼앗았다"고 말하는 것. 교사가 보드와 연출 중
+ * 어느 쪽을 믿어야 할지 모르게 되는 순간 이 기능은 없느니만 못하다.
+ */
+function expectedFx(results) {
+  const out = { normal: 0, names: {} };
+  const push = (kind, name) => {
+    (out.names[kind] ??= []);
+    if (!out.names[kind].includes(name)) out.names[kind].push(name);
+  };
+  for (const { name, r } of results) {
+    if (!r.correct) continue;
+    if (r.cellType === "T") push(r.bonus > 0 ? "treasure-bonus" : "treasure-claim", name);
+    else if (r.cellType === "A") push(r.stolen !== null ? "attack-steal" : "attack-claim", name);
+    else if (r.cellType === "S") push("storm", name);
+    else out.normal++;
+  }
+  return out;
+}
+
+function sameFx(a, b) {
+  if (!a || !b || a.normal !== b.normal) return false;
+  const keys = new Set([...Object.keys(a.names), ...Object.keys(b.names)]);
+  for (const k of keys) {
+    const x = [...(a.names[k] ?? [])].sort();
+    const y = [...(b.names[k] ?? [])].sort();
+    if (JSON.stringify(x) !== JSON.stringify(y)) return false;
+  }
+  return true;
+}
 
 async function main() {
   const csv = await (await fetch(`${BASE}/`)).text().then(() => null).catch(() => null);
@@ -175,12 +210,45 @@ async function main() {
   teacher.send({ t: "cmd", cmd: "newgame", actionId: uid() });
   await sleep(400);
 
+  let pending = null; // 직전 턴에 실제로 일어난 일. 턴이 넘어간 뒤 요약과 대조한다.
+  const checkFx = () => {
+    if (!pending) return;
+    const got = teacher.state.turnFx?.[pending.team];
+    stats.fxChecked++;
+    if (!sameFx(expectedFx(pending.results), got)) {
+      stats.fxWrong++;
+      console.log(`   ⚠ ${pending.team}팀 턴 요약이 어긋남`,
+        JSON.stringify(expectedFx(pending.results)), "≠", JSON.stringify(got));
+    }
+    pending = null;
+  };
+
+  /**
+   * 턴을 확실히 넘긴다.
+   *
+   * [다음 턴]에는 2초 연타 방지가 걸려 있다(TURN_DEBOUNCE_MS). 학생들이 빨리 풀고 나면
+   * 그 2초 안에 다시 눌리는데, 그러면 명령이 조용히 거절되고 **같은 턴이 이어진다.**
+   * 예전에는 그걸 모른 채 다음 턴으로 여기고 진행해서, 학생 전원이 already-played 로
+   * 튕기고 점검 결과도 한 턴씩 밀렸다. 넘어간 것을 확인할 때까지 기다린다.
+   */
+  async function nextTurn() {
+    const where = () => `${teacher.state.turnTeam}:${teacher.state.round}:${teacher.state.status}`;
+    for (let tries = 0; tries < 4; tries++) {
+      const before = where();
+      teacher.send({ t: "cmd", cmd: "next", actionId: uid() });
+      if (await teacher.waitUntil(() => where() !== before, 3000)) return true;
+      await sleep(2100); // 연타 방지가 풀릴 때까지
+    }
+    return false;
+  }
+
   for (let turn = 0; turn < ROUNDS * 2; turn++) {
-    teacher.send({ t: "cmd", cmd: "next", actionId: uid() });
-    await sleep(400);
+    if (!(await nextTurn())) break;
+    checkFx();
     const team = teacher.state.turnTeam;
     if (!team || teacher.state.status === "ended") break;
 
+    const turnResults = [];
     const playing = students.filter((s) => s.state.myPlayer.team === team);
     for (const s of playing) {
       await s.sync();
@@ -209,15 +277,19 @@ async function main() {
       stats.answered++;
       if (got.length > 1 && JSON.stringify(got[0]) === JSON.stringify(got[1])) stats.dupIgnored++;
       const r = got[0];
+      turnResults.push({ name: s.name, r });
       if (r.correct) stats.correct++;
       // 서버가 알려 준 정답 글자가 내가 본 보기 안에 있어야 한다
       if (!shown.options.includes(r.answerText)) stats.wrongGraded++;
     }
+    pending = { team, results: turnResults };
     await sleep(300);
   }
 
   teacher.send({ t: "cmd", cmd: "end", actionId: uid() });
   await sleep(500);
+  await teacher.sync(); // [종료]도 마지막 턴을 갈무리한다. 그것까지 대조한다.
+  checkFx();
 
   for (const c of [teacher, ...students]) stats.gaps += c.gaps;
   const s0 = students[0].state;
@@ -229,11 +301,12 @@ async function main() {
   console.log(`문제-정답 어긋남 ${stats.wrongGraded}  ← 0 이어야 한다`);
   console.log(`재시도를 한 번만 반영 ${stats.dupIgnored}/${stats.answered}  ← 같아야 한다`);
   console.log(`순번(rev) 건너뜀 ${stats.gaps}  ← 0 이어야 한다`);
+  console.log(`턴 요약 어긋남 ${stats.fxWrong}/${stats.fxChecked}  ← 0 이어야 한다`);
   console.log(`학생 화면이 본 마지막 점수: 홍 ${s0.scores.H.total} : 청 ${s0.scores.C.total}  ← 선생님과 같아야 한다`);
   if (Object.keys(stats.errors).length) console.log("거절:", stats.errors);
 
   const bad = stats.wrongGraded || stats.gaps || stats.dupIgnored !== stats.answered
-    || s0.scores.H.total !== teacher.state.scores.H.total;
+    || stats.fxWrong || s0.scores.H.total !== teacher.state.scores.H.total;
   console.log(bad ? "\n❌ 문제가 있다" : "\n✅ 통과");
   for (const c of [teacher, ...students]) c.ws.close();
   process.exit(bad ? 1 : 0);

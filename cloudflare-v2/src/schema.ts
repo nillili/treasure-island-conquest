@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS room (
   round_limit    INTEGER NOT NULL DEFAULT 10,
   turn_team      TEXT,
   turn_ends_at   INTEGER,
-  turn_seconds   INTEGER NOT NULL DEFAULT 60,
+  turn_seconds   INTEGER NOT NULL DEFAULT 20,
   cnt_t          INTEGER NOT NULL DEFAULT 8,
   cnt_s          INTEGER NOT NULL DEFAULT 7,
   cnt_a          INTEGER NOT NULL DEFAULT 7,
@@ -84,4 +84,13 @@ CREATE TABLE IF NOT EXISTS events (
   detail    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
+
+-- 방금 끝난 턴에 각 팀이 한 일. 선생님 화면의 3D 무대가 이것만 보고 그린다. 팀당 한 줄.
+-- room 에 컬럼을 더하지 않은 이유: 여기는 CREATE TABLE IF NOT EXISTS 뿐이라 이미 만들어져
+-- 돌고 있는 방의 DO 에는 새 컬럼이 안 생긴다. 새 테이블은 안전하다.
+CREATE TABLE IF NOT EXISTS fx (
+  team   TEXT PRIMARY KEY,
+  detail TEXT    NOT NULL,
+  at     INTEGER NOT NULL
+);
 `;

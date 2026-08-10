@@ -22,6 +22,14 @@ interface StateMsg {
   cellLocks: Record<string, string>;
   myPlayer: { id: string; team: "H" | "C"; pos: number; playedThisTurn: boolean } | null;
   maxPlayers: number;
+  turnFx: { H: TurnFxMsg | null; C: TurnFxMsg | null };
+}
+
+interface TurnFxMsg {
+  turnKey: string;
+  round: number;
+  normal: number;
+  names: Partial<Record<"treasure-bonus" | "treasure-claim" | "attack-steal" | "attack-claim" | "storm", string[]>>;
 }
 
 let teacherCookie = "";
@@ -528,5 +536,249 @@ describe("정원", () => {
     for (let i = 0; i < 41; i++) await join(`학생${i}`);
     const out = await rpc({ t: "hello", role: "student", name: "마흔둘" });
     expect(out.code).toBe("room-full");
+  });
+});
+
+/**
+ * 3D 무대에 올릴 턴 요약.
+ *
+ * 여기서 지키는 것은 하나다 — **연출은 정본이 실제로 바꾼 것만 말한다.**
+ * 보너스를 못 받은 보물칸을 "+2"라고 하거나, 빼앗은 땅이 없는데 "빼앗았다"고 하면
+ * 교사가 보드와 연출 중 어느 쪽을 믿어야 할지 모르게 된다.
+ */
+describe("턴 요약 (3D 무대)", () => {
+  const stub = () => env.ROOM.getByName(roomCode);
+
+  /** 시간을 과거로 돌린다. 실제로 기다릴 수는 없다. */
+  const rewind = (sql: string) =>
+    runInDurableObject(stub(), (_i, state) => {
+      state.storage.sql.exec(sql, Date.now() - 10_000);
+    });
+
+  /** 방 안의 SQL 을 직접 실행한다. 특수칸 분기를 만들려면 이 방법뿐이다. */
+  const inRoom = (sql: string, ...args: (string | number)[]) =>
+    runInDurableObject(stub(), (_i, state) => {
+      state.storage.sql.exec(sql, ...args);
+    });
+
+  /** 그 칸에 배정된 문제의 정답 번호. 4개를 다 눌러 보는 대신 정확히 맞히거나 정확히 틀린다. */
+  async function answerOf(cell: number): Promise<number> {
+    let ans = 0;
+    await runInDurableObject(stub(), (_i, state) => {
+      ans = state.storage.sql
+        .exec<{ a: number }>(
+          "SELECT q.ans AS a FROM cells c JOIN quizzes q ON q.idx = c.quiz_idx WHERE c.idx = ?",
+          cell,
+        )
+        .one().a;
+    });
+    return ans;
+  }
+
+  /** [다음 턴] 버튼 말고 타이머로 넘긴다. 연타 방지 2초를 기다리지 않아도 되고, 알람 경로까지 함께 시험된다. */
+  async function timeoutTurn() {
+    await rewind("UPDATE room SET turn_ends_at = ? WHERE id = 1");
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+  }
+
+  async function bothPlayers() {
+    const a = await join("민수");
+    const b = await join("영희");
+    await teacherCmd("newgame");
+    await teacherCmd("next");
+    return [a.myPlayer!.id, b.myPlayer!.id] as const;
+  }
+
+  /** 그 상태의 주인공 이름. 팀 배정이 무작위라 이름을 박아 두면 판마다 깨진다. */
+  const nameOf = (s: StateMsg) => s.players.find((p) => p.id === s.myPlayer!.id)!.name;
+
+  /** 지금 차례인 학생의 상태를 돌려준다. */
+  async function whoseTurn(ids: readonly string[]): Promise<StateMsg> {
+    for (const id of ids) {
+      const s = await myState(id);
+      if (s.turnTeam === s.myPlayer!.team) return s;
+    }
+    throw new Error("차례인 학생이 없다");
+  }
+
+  /** 지금 차례인 학생이 지정한 종류의 칸을 푼다. */
+  async function solve(state: StateMsg, type: "N" | "T" | "S" | "A", ok = true) {
+    const id = state.myPlayer!.id;
+    const cell = pickableCell(state);
+    await inRoom("UPDATE cells SET type = ? WHERE idx = ?", type, cell);
+    await rpc({ t: "pick", cell, actionId: crypto.randomUUID(), playerId: id });
+    const ans = await answerOf(cell);
+    await rpc({
+      t: "answer",
+      cell,
+      choice: ok ? ans : (ans + 1) % 4,
+      actionId: crypto.randomUUID(),
+      playerId: id,
+    });
+    return cell;
+  }
+
+  const teacherState = async () => (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+
+  it("시작하자마자는 양쪽 다 비어 있다", async () => {
+    await bothPlayers();
+    const st = await teacherState();
+    expect(st.turnFx.H).toBeNull();
+    expect(st.turnFx.C).toBeNull();
+  });
+
+  it("📦 보너스를 받으면 '보물'로 남는다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "T");
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.names["treasure-bonus"]).toEqual([nameOf(me)]);
+    expect(fx.names["treasure-claim"]).toBeUndefined();
+    expect(fx.normal).toBe(0);
+  });
+
+  it("📦 이미 받은 보물칸이면 '+2'라고 하지 않는다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    const cell = pickableCell(me);
+    // 두 팀 다 이미 이 칸의 보너스를 받았다고 표시한다(1|2 = 3).
+    await inRoom("UPDATE cells SET type = 'T', bonus_taken = 3 WHERE idx = ?", cell);
+    await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
+    await rpc({ t: "answer", cell, choice: await answerOf(cell), actionId: "a", playerId: me.myPlayer!.id });
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.names["treasure-claim"]).toHaveLength(1);
+    expect(fx.names["treasure-bonus"]).toBeUndefined();
+  });
+
+  it("💥 상대 땅이 있으면 '빼앗았다'", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "A");
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.names["attack-steal"]).toHaveLength(1);
+    expect(fx.names["attack-claim"]).toBeUndefined();
+  });
+
+  it("💥 빼앗을 상대 땅이 없으면 '빼앗았다'가 아니다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    const enemy = me.myPlayer!.team === "H" ? "C" : "H";
+    const cell = pickableCell(me);
+    await inRoom("UPDATE cells SET type = 'A' WHERE idx = ?", cell);
+    await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
+    // 채점 직전에 상대 땅을 모두 없앤다 — 공격은 성공하지만 가져올 칸이 없다.
+    await inRoom("UPDATE cells SET owner = NULL, owned_by = NULL WHERE owner = ?", enemy);
+    await rpc({ t: "answer", cell, choice: await answerOf(cell), actionId: "a", playerId: me.myPlayer!.id });
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.names["attack-claim"]).toHaveLength(1);
+    expect(fx.names["attack-steal"]).toBeUndefined();
+  });
+
+  it("⛈️ 폭풍은 이름과 함께 남는다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "S");
+    await timeoutTurn();
+
+    expect((await teacherState()).turnFx[me.myPlayer!.team]!.names["storm"]).toHaveLength(1);
+  });
+
+  it("🚩 일반 칸은 사람 수만 세고 이름은 안 쓴다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "N");
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.normal).toBe(1);
+    expect(fx.names).toEqual({});
+  });
+
+  it("❌ 틀린 사람은 어디에도 안 나온다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "T", false);
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.normal).toBe(0);
+    expect(fx.names).toEqual({});
+  });
+
+  it("팀마다 따로 쌓이고, 최신 턴만 남는다", async () => {
+    const ids = await bothPlayers();
+    const first = await whoseTurn(ids);
+    const teamA = first.myPlayer!.team;
+    const teamB = teamA === "H" ? "C" : "H";
+
+    await solve(first, "T"); //  A팀: 보물
+    await timeoutTurn();
+    await solve(await whoseTurn(ids), "S"); // B팀: 폭풍
+    await timeoutTurn();
+
+    let st = await teacherState();
+    expect(st.turnFx[teamA]!.names["treasure-bonus"]).toHaveLength(1);
+    expect(st.turnFx[teamB]!.names["storm"]).toHaveLength(1);
+
+    // A팀 차례가 다시 왔다. 이번엔 아무것도 못 했다면 앞 턴의 보물은 지워진다.
+    await timeoutTurn();
+    st = await teacherState();
+    expect(st.turnFx[teamA]!.names["treasure-bonus"]).toBeUndefined();
+    expect(st.turnFx[teamA]!.normal).toBe(0);
+    expect(st.turnFx[teamB]!.names["storm"]).toHaveLength(1); // B팀 것은 그대로
+  });
+
+  it("[종료]를 눌러도 마지막 턴이 남는다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "T");
+    await teacherCmd("end");
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.names["treasure-bonus"]).toHaveLength(1);
+  });
+
+  it("라운드가 끝나 저절로 종료돼도 마지막 턴이 한 번만 남는다", async () => {
+    // advanceTurn 이 스스로 endGame 을 부르는 경로다. 두 곳 모두 요약을 뜨므로 겹치기 쉽다.
+    roomCode = await makeRoom(teacherCookie, { roundLimit: 1 });
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "T");
+    await timeoutTurn(); // 홍→청
+    await timeoutTurn(); // 라운드 한계 → 자동 종료
+
+    const st = await teacherState();
+    expect(st.status).toBe("ended");
+    expect(st.turnFx[me.myPlayer!.team]!.names["treasure-bonus"]).toEqual([nameOf(me)]);
+  });
+
+  it("새 게임을 하면 지난 판 결과가 사라진다", async () => {
+    const ids = await bothPlayers();
+    await solve(await whoseTurn(ids), "T");
+    await timeoutTurn();
+    expect((await teacherState()).turnFx.H ?? (await teacherState()).turnFx.C).not.toBeNull();
+
+    await teacherCmd("newgame");
+    const st = await teacherState();
+    expect(st.turnFx.H).toBeNull();
+    expect(st.turnFx.C).toBeNull();
+  });
+
+  it("학생이 다시 붙어도 선생님과 같은 요약을 본다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solve(me, "T");
+    await timeoutTurn();
+
+    const mine = await myState(ids[0]);
+    expect(mine.turnFx).toEqual((await teacherState()).turnFx);
   });
 });

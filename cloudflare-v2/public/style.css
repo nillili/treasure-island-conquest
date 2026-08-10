@@ -59,3 +59,117 @@
 .problems div{padding:1px 0}
 .turn-hint{font-size:12px;color:#4a5b66;margin-bottom:7px;min-height:16px}
 .turn-hint.bad{color:#c0392b;font-weight:700}
+
+/* ── 3D 팀 무대 ─────────────────────────────────────────────────────────────
+   보드 좌우에 남는 자리를 팀별 무대로 쓴다. 왼쪽은 홍팀, 오른쪽은 청팀 고정.
+   차례인 팀 무대에 팀 색 빛이 깔리고, 반대쪽에는 그 팀이 방금 끝낸 턴의 결과가 남는다.
+   아래 여섯 값은 fx-preview.html 에서 눈으로 정한 것을 옮겨 적는다. */
+:root{
+  --fx-tint-H:224 90 79;    /* #e05a4f */
+  --fx-tint-C:47 158 68;    /* #2f9e44 — 청팀은 파랑이 아니라 초록이다 */
+  --fx-tint-alpha:.49;      /* 배경 빛 진하기 */
+  --fx-tint-size:73%;       /* 빛이 퍼지는 반경 */
+  --fx-glow:1;             /* 발밑 조명 세기 */
+  --fx-glow-y:36%;          /* 발밑 조명 높이 — 캐릭터 발끝에 맞춘다 */
+  --fx-rest:.35;            /* 차례가 아닌 쪽 채도 */
+  --fx-s-search:1;          /* 장면별 인물 크기 보정 */
+  --fx-s-treasure:1.02;
+  --fx-s-storm:1;
+  --fx-s-attack:1.03;
+}
+
+/* 평소엔 접혀 있고, 실제로 잴 만큼 자리가 있을 때만 JS 가 .wide 를 붙인다.
+   판이 10×10~15×15 로 변해 보드 폭이 609~750px 사이를 오가므로 화면 폭만으로는 못 정한다. */
+.board-stage{display:block}
+.board-stage .fx{display:none}
+.board-stage.wide{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:10px;align-items:stretch}
+.board-stage.wide .fx{display:flex}
+
+.fx{position:relative;min-width:0;min-height:0;flex-direction:column;align-items:center;justify-content:center}
+.fx[data-team="H"]{--tint:var(--fx-tint-H)}
+.fx[data-team="C"]{--tint:var(--fx-tint-C)}
+
+/* ① 배경 빛 — 네모난 반투명 판이 아니라 둥근 빛이다. 사각형을 덮으면 바다 배경 위에
+   경계선이 뚜렷한 네모가 생기고 캐릭터 그림자와 부딪힌다. */
+.fx::before{content:"";position:absolute;inset:-6px;border-radius:26px;z-index:0;
+  opacity:0;transition:opacity .6s ease;pointer-events:none;
+  background:radial-gradient(closest-side circle at 50% 58%,
+    rgb(var(--tint) / var(--fx-tint-alpha)) 0%, rgb(var(--tint) / 0) var(--fx-tint-size))}
+/* ② 발밑 조명 — 무대에 서 있는 느낌. 배경 빛을 아주 옅게 줘도 팀 색이 남는다. */
+.fx::after{content:"";position:absolute;left:50%;bottom:var(--fx-glow-y);transform:translateX(-50%);
+  width:52%;height:30px;border-radius:50%;z-index:0;filter:blur(4px);
+  opacity:0;transition:opacity .6s ease;pointer-events:none;
+  background:radial-gradient(ellipse, rgb(var(--tint) / var(--fx-glow)) 0%, rgb(var(--tint) / 0) 70%)}
+.fx.turn::before,.fx.turn::after{opacity:1}
+/* ③ 차례가 아닌 쪽은 한 걸음 물린다. 색을 더하지 않고 대비를 만드는 방법이다.
+   filter 를 카드(.fx-card)에 걸면 안 된다 — 조상 .panel 의 backdrop-filter 와 겹쳐
+   크롬이 그 자리에 회색 사각형을 칠한다. 변수만 얹고 실제 filter 는 그림에만 건다. */
+.fx:not(.turn) .fx-card{--fx-sat:var(--fx-rest)}
+
+/* 카드는 겹쳐 두고 .on 만 보인다. 회전할 때 그림을 다시 받지 않는다. */
+.fx-card{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding-bottom:52px;
+  opacity:0;transform:scale(.96);transition:opacity .45s,transform .45s;pointer-events:none}
+.fx-card.on{opacity:1;transform:scale(1)}
+/* 세로도 잘리면 안 된다. 제목·이름·시계 자리를 뺀 만큼만 그림에 준다. */
+.fx-card img{width:min(100%,420px);max-height:calc(100% - 184px);object-fit:contain;
+  filter:drop-shadow(0 12px 18px #12384f55) saturate(var(--fx-sat,1))
+         grayscale(var(--fx-gray,0)) opacity(var(--fx-op,1))}
+.fx-fallback{font-size:clamp(60px,9vw,120px);line-height:1;
+  filter:drop-shadow(0 10px 14px #12384f55) grayscale(var(--fx-gray,0)) opacity(var(--fx-op,1))}
+/* 장면마다 구도가 달라 인물이 커 보이고 작아 보인다(폭풍은 야자수가 화면의 93%를 먹는다).
+   여기서 조금 맞춘다. 크게 키우면 그림이 무대 밖으로 삐져나오므로 미세 조정만 한다. */
+.fx-card img{--s:1;transform:scale(var(--s))}
+.fx-card[data-kind="search"] img{--s:var(--fx-s-search)}
+.fx-card[data-kind="treasure"] img{--s:var(--fx-s-treasure)}
+.fx-card[data-kind="storm"] img{--s:var(--fx-s-storm)}
+.fx-card[data-kind="attack"] img{--s:var(--fx-s-attack)}
+
+.fx-title{margin-top:6px;font-size:clamp(16px,1.5vw,26px);font-weight:900;color:#fff;
+  background:#12384fcc;border-radius:12px;padding:6px 16px;text-align:center;z-index:1;
+  max-width:100%;word-break:keep-all;line-height:1.35}
+.fx-names{margin-top:6px;font-size:clamp(13px,1.1vw,20px);font-weight:800;color:#fff;
+  background:#12384f99;border-radius:10px;padding:4px 13px;text-align:center;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;z-index:1}
+.fx[data-team="H"] .fx-title{background:#b53a30ee}
+.fx[data-team="C"] .fx-title{background:#227a34ee}
+/* 남은 시간을 차례인 팀 밑에 크게 복제한다. 위쪽 타이머는 어느 팀 것인지 안 보인다. */
+.fx-clock{position:absolute;bottom:6px;z-index:1;font-size:clamp(26px,2.6vw,44px);
+  font-weight:900;color:#12384f;text-shadow:0 2px 8px #fffdf5;display:none;
+  font-variant-numeric:tabular-nums}
+.fx[data-team="H"] .fx-clock{color:#b53a30}
+.fx[data-team="C"] .fx-clock{color:#227a34}
+.fx.turn .fx-clock{display:block}
+.fx-lead{animation:fx-blink 1.4s ease-in-out infinite}
+@keyframes fx-blink{50%{opacity:.35}}
+
+.fx-dots{position:absolute;bottom:2px;display:flex;gap:6px;z-index:1}
+.fx-dots i{width:8px;height:8px;border-radius:50%;background:#ffffff70}
+.fx-dots i.on{background:#fff}
+
+/* 수색 중 — 걸어가며 훑는 느낌을 그림 1장으로 만든다. */
+.fx-card.searching img{animation:fx-search 2.6s ease-in-out infinite}
+@keyframes fx-search{
+  0%,100%{transform:translate(-9px,0) rotate(-1.6deg) scale(var(--s))}
+  25%,75%{transform:translate(0,-11px) rotate(0deg)   scale(var(--s))}
+  50%    {transform:translate(9px,0)  rotate(1.6deg)  scale(var(--s))}
+}
+.fx-card.pop img{animation:fx-pop .55s cubic-bezier(.2,1.5,.4,1) 1}
+@keyframes fx-pop{0%{transform:scale(calc(var(--s)*.7))}60%{transform:scale(calc(var(--s)*1.07))}100%{transform:scale(var(--s))}}
+/* 이름을 faded 로 둔다. dim 은 이미 모달 뒷배경(.dim{background:#102b3d99})이 쓰고 있어서,
+   그 이름을 붙이면 카드 자리에 남색 사각형이 그대로 칠해진다. 2026-08-10 에 실제로 그랬다. */
+.fx-card.faded{--fx-gray:.7;--fx-op:.45}
+
+/* 아주 좁으면 안전망. 평소 접기는 JS 가 실제 폭을 재서 한다. */
+@media(max-width:1100px){.board-stage.wide{display:block}.board-stage.wide .fx{display:none}}
+
+/* 멀미 줄이기 — 움직임을 멈추는 대신 **정보를 잃지 않게** 세로로 전부 펼친다.
+   첫 카드만 남기면 보물을 열었다는 사실을 못 보고 지나간다. */
+@media(prefers-reduced-motion:reduce){
+  .fx{justify-content:flex-start;overflow:auto}
+  .fx-card{position:relative;inset:auto;opacity:1;transform:none;transition:none;padding-bottom:0}
+  .fx-card img{max-height:22vh;animation:none!important;transform:none!important}
+  .fx-lead{animation:none}
+  .fx-dots{display:none}
+  .fx::before,.fx::after{transition:none}
+}

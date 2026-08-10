@@ -27,7 +27,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-08-09b";
+const APP_BUILD = "2026-08-10b";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -139,6 +139,129 @@ function renderBoard(hostId, admin) {
   host.innerHTML = html;
 }
 
+// ── 3D 팀 무대 (선생님 화면 전용) ────────────────────────────────────────────
+// 규칙 두 개만 지키면 된다.
+//  · **내용이 바뀔 때만** DOM 을 다시 만든다. 매 render 마다 새로 만들면 patch 가 올 때마다
+//    (한 턴에 스무 번도 온다) 수색 애니메이션이 처음으로 되감겨 캐릭터가 계속 움찔거린다.
+//  · 무대를 펼칠지는 **실제 남는 폭을 재서** 정한다. 판이 10×10~15×15 라 보드 폭이
+//    609~750px 사이를 오가므로 화면 폭만으로는 판정이 안 된다.
+const FX_KIND = {
+  "treasure-bonus": { img: "treasure", title: "📦 보물을 열었다! +2" },
+  "treasure-claim": { img: "treasure", title: "📦 보물칸을 점령했다" },
+  "attack-steal": { img: "attack", title: "💥 상대 땅을 빼앗았다!" },
+  "attack-claim": { img: "attack", title: "💥 공격 거점을 점령했다" },
+  storm: { img: "storm", title: "⛈️ 폭풍에 갇혔다 — 다음 턴 쉼" },
+};
+const FX_ORDER = ["treasure-bonus", "attack-steal", "treasure-claim", "attack-claim", "storm"];
+const FX_EMOJI = { search: "🔍", treasure: "📦", storm: "⛈️", attack: "💥" };
+// 한쪽에 이만큼도 안 남으면 접는다. 1366px 노트북에서 12×12 판이면 정확히 199.5px 가 남는다
+// — 거기서 잘리지 않도록 190 으로 둔다. 이 아래로는 그림이 너무 작아 알아볼 수 없다.
+const FX_MIN_SIDE = 190;
+const FX = { H: { sig: "", i: 0, n: 1 }, C: { sig: "", i: 0, n: 1 } };
+const fxCalm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * 배포 버전을 붙인다. 그림을 고쳐 올렸을 때 열려 있던 탭에 옛 그림이 남지 않는다.
+ *
+ * ⚠ **그림 파일을 바꿨으면 반드시 APP_BUILD 도 올린다.**
+ *   /assets/* 는 7일 캐시라(public/_headers), 이 값이 그대로면 URL 이 안 바뀌고
+ *   브라우저는 옛 그림을 계속 쓴다. 2026-08-10 에 청팀 그림을 뒤집어 배포하고도
+ *   화면이 안 바뀐 것이 이 때문이다. app.js · index.html 의 ?v= · diagnose.ts 의 BUILD 셋을 같이 올린다.
+ */
+const fxSrc = (kind, team) => `/assets/fx/${kind}-${team}.webp?v=${APP_BUILD}`;
+const FX_FILES = [];
+for (const k of ["search", "treasure", "storm", "attack"]) for (const t of ["H", "C"]) FX_FILES.push(fxSrc(k, t));
+
+function fxImg(kind, team) {
+  // 그림이 없어도 수업은 굴러가야 한다. 못 받으면 큰 이모지로 대신한다.
+  return `<img src="${fxSrc(kind, team)}" alt=""
+    onerror="this.outerHTML='<div class=\'fx-fallback\'>${FX_EMOJI[kind]}</div>'">`;
+}
+
+/** 턴 요약 → 보여줄 카드 목록. 배열 순서가 곧 회전 순서다. */
+function fxCards(fx) {
+  const out = [];
+  for (const kind of FX_ORDER) {
+    const names = fx.names?.[kind];
+    if (!names || !names.length) continue;
+    const shown = names.slice(0, 6).join(" · ") + (names.length > 6 ? ` 외 ${names.length - 6}명` : "");
+    out.push({ kind: FX_KIND[kind].img, title: FX_KIND[kind].title, names: shown });
+  }
+  if (fx.normal > 0) out.push({ kind: "search", title: `🚩 ${fx.normal}명이 땅을 넓혔다`, names: "" });
+  if (!out.length) out.push({ kind: "search", title: "이번 턴엔 아무도 못 했어요", names: "", faded: true });
+  return out;
+}
+
+/** 무대를 펼칠 자리가 있는지 실제로 잰다. 보드를 그린 뒤에 부른다. */
+function fxFits() {
+  const stage = $("board-stage");
+  const board = $("admin-board");
+  if (!stage || !board || !board.offsetWidth) return false;
+  return (stage.clientWidth - board.offsetWidth - 20) / 2 >= FX_MIN_SIDE; // 20 = 좌우 gap
+}
+
+function renderFx() {
+  const st = APP.state;
+  const stage = $("board-stage");
+  if (!st || !stage) return;
+  stage.classList.toggle("wide", fxFits());
+  if (!stage.classList.contains("wide")) return;
+
+  const solving = new Set(Object.values(st.cellLocks || {}));
+  for (const team of ["H", "C"]) {
+    const host = $(`fx-${team}`);
+    const myTurn = st.status === "running" && st.turnTeam === team;
+    host.classList.toggle("turn", myTurn);
+
+    let cards;
+    if (myTurn) {
+      const n = st.players.filter((p) => p.team === team && solving.has(p.id)).length;
+      cards = [{
+        kind: "search", searching: true,
+        title: `▶ ${team === "H" ? "홍팀" : "청팀"} 수색 중`,
+        names: n ? `${n}명이 문제를 푸는 중` : "",
+      }];
+    } else {
+      const fx = st.turnFx?.[team];
+      cards = fx ? fxCards(fx) : [{ kind: "search", title: "차례를 기다리는 중", names: "", faded: true }];
+    }
+
+    // 서명이 같으면 DOM 을 건드리지 않는다 — 그래야 애니메이션이 이어진다.
+    const sig = `${st.status}|${st.turnTeam}|${cards.map((c) => c.kind + c.title + c.names).join("~")}`;
+    if (FX[team].sig === sig) continue;
+    FX[team].sig = sig;
+    FX[team].i = 0;
+    FX[team].n = cards.length;
+    host.innerHTML =
+      cards.map((c, i) => `<div class="fx-card ${i === 0 ? "on" : ""} ${c.searching ? "searching" : "pop"} ${c.faded ? "faded" : ""}" data-kind="${c.kind}">
+          ${fxImg(c.kind, team)}
+          <div class="fx-title${c.searching ? " fx-lead" : ""}">${esc(c.title)}</div>
+          ${c.names ? `<div class="fx-names">${esc(c.names)}</div>` : ""}
+        </div>`).join("")
+      + `<div class="fx-clock" id="fx-clock-${team}"></div>`
+      + (cards.length > 1 && !fxCalm()
+        ? `<div class="fx-dots">${cards.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>`
+        : "");
+  }
+}
+
+// 2.5초마다 다음 카드. 한 장뿐이거나 멀미 줄이기면 돌지 않는다
+// (멀미 줄이기에서는 CSS 가 카드를 세로로 전부 펼쳐서 정보가 사라지지 않는다).
+setInterval(() => {
+  if (APP.role !== "teacher" || fxCalm()) return;
+  for (const team of ["H", "C"]) {
+    if (FX[team].n < 2) continue;
+    const host = $(`fx-${team}`);
+    if (!host) continue;
+    FX[team].i = (FX[team].i + 1) % FX[team].n;
+    host.querySelectorAll(".fx-card").forEach((el, i) => el.classList.toggle("on", i === FX[team].i));
+    host.querySelectorAll(".fx-dots i").forEach((el, i) => el.classList.toggle("on", i === FX[team].i));
+  }
+}, 2500);
+
+// 창 크기가 바뀌면 칸 크기와 함께 무대 접기도 다시 잰다.
+addEventListener("resize", () => { if (APP.role === "teacher") render(); });
+
 function renderLog(hostId) {
   const rows = (APP.state?.log || []).slice(0, 8);
   $(hostId).innerHTML = rows.length
@@ -209,6 +332,7 @@ function renderAdmin() {
   button.disabled = false; // 어떤 상황에서도 잠그지 않는다
   renderBoard("admin-board", true);
   renderLog("a-log");
+  renderFx();
 }
 
 const render = () => (APP.role === "teacher" ? renderAdmin() : renderStudent());
@@ -221,6 +345,11 @@ function updateTimer() {
   const text = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const el = APP.role === "teacher" ? $("a-timer") : $("s-timer");
   if (el) el.textContent = text;
+  // 위쪽 타이머는 어느 팀 시간인지 안 보인다. 차례인 팀 무대 밑에 크게 한 번 더 띄운다.
+  if (APP.role === "teacher" && st.turnTeam) {
+    const clock = $(`fx-clock-${st.turnTeam}`);
+    if (clock) clock.textContent = text;
+  }
   if (APP.role === "student" && left === 0 && APP.mode === "solving") {
     APP.mode = "waiting";
     hideQuiz();
@@ -284,6 +413,7 @@ function onMessage(msg) {
       Object.assign(APP.state, {
         status: msg.status, round: msg.round, turnTeam: msg.turnTeam,
         turnEndsAt: msg.turnEndsAt, players: msg.players, cellLocks: msg.cellLocks,
+        turnFx: msg.turnFx,
       });
       if (APP.state.myPlayer) {
         const mine = msg.players.find((p) => p.id === APP.playerId);
@@ -453,6 +583,8 @@ async function enterAsStudent(code, name) {
 }
 
 function enterAsTeacher(code) {
+  // 미리 받아 두지 않으면 첫 턴이 끝나는 순간 그림이 늦게 떠서 빈 자리가 잠깐 보인다.
+  for (const src of FX_FILES) { const im = new Image(); im.src = src; }
   APP.role = "teacher";
   APP.code = code;
   APP.rev = -1;

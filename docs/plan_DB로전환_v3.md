@@ -342,7 +342,7 @@ CREATE TABLE IF NOT EXISTS room (
   round_limit   INTEGER NOT NULL DEFAULT 10,
   turn_team     TEXT,
   turn_ends_at  INTEGER,
-  turn_seconds  INTEGER NOT NULL DEFAULT 60,
+  turn_seconds  INTEGER NOT NULL DEFAULT 20,
   cnt_t         INTEGER NOT NULL DEFAULT 8,
   cnt_s         INTEGER NOT NULL DEFAULT 7,
   cnt_a         INTEGER NOT NULL DEFAULT 7,

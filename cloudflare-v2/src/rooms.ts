@@ -22,7 +22,7 @@ const DEFAULTS = {
   rows: 12,
   cols: 12,
   roundLimit: 10,
-  turnSeconds: 60,
+  turnSeconds: 20,
   cntT: 8,
   cntS: 7,
   cntA: 7,

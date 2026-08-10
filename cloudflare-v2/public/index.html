@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=1">
-<script src="/net.js?v=1" defer></script>
-<script src="/app.js?v=1" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-08-10b">
+<script src="/net.js?v=2026-08-10b" defer></script>
+<script src="/app.js?v=2026-08-10b" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -93,7 +93,7 @@
         <input class="input" id="cfg-cols" type="number" min="10" max="15" value="12">
       </div></div>
       <div class="field"><label for="cfg-time">턴 시간(초)</label>
-        <input class="input" id="cfg-time" type="number" min="10" max="300" value="60"></div>
+        <input class="input" id="cfg-time" type="number" min="10" max="300" value="20"></div>
       <div class="field"><label for="cfg-round">라운드</label>
         <input class="input" id="cfg-round" type="number" min="1" max="30" value="10"></div>
       <div class="field"><label>특수칸 📦⛈️💥</label><div class="field-row">
@@ -219,7 +219,11 @@
           <span class="spacer"></span>
           <b class="timer" id="a-timer">00:00</b>
         </div>
-        <div class="board-wrap"><div id="admin-board" class="board"></div></div>
+        <div class="board-stage" id="board-stage">
+          <div class="fx" id="fx-H" data-team="H"></div>
+          <div class="board-wrap"><div id="admin-board" class="board"></div></div>
+          <div class="fx" id="fx-C" data-team="C"></div>
+        </div>
       </div>
     </div>
     <div class="sidebar">

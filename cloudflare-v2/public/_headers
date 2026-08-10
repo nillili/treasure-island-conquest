@@ -1,8 +1,27 @@
-/*
+# 통짜 /* 규칙을 쓰지 않는다.
+# 여러 규칙이 맞으면 헤더가 합쳐지기 때문에, /* 에 no-store 를 걸어 두고 /assets/* 에 캐시를
+# 덧붙이면 no-store 가 안 사라진다. 그래서 화면 파일만 하나씩 적는다.
+
+/
   Cache-Control: no-cache, no-store, must-revalidate
 
 /index.html
   Cache-Control: no-cache, no-store, must-revalidate
 
-/
+/app.js
   Cache-Control: no-cache, no-store, must-revalidate
+
+/net.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/style.css
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/fx-preview*
+  Cache-Control: no-cache, no-store, must-revalidate
+
+# 그림은 오래 캐시한다. 배경 2.1MB + 3D 8장 1.5MB 를 매번 새로 받게 두면 교실 와이파이에서
+# 첫 화면이 뻑뻑해진다. immutable 은 일부러 안 쓴다 — 이름이 고정이라 잘못 올렸을 때
+# 되돌릴 길이 없어진다. 대신 코드가 URL 에 ?v=APP_BUILD 를 붙인다.
+/assets/*
+  Cache-Control: public, max-age=604800

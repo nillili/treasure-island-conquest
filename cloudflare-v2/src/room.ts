@@ -20,10 +20,12 @@ import {
 import {
   ERROR_CODES as E,
   type ClientMessage,
+  type FxKind,
   type LogEntry,
   type PublicCell,
   type PublicPlayer,
   type Scores,
+  type TurnFx,
 } from "./protocol";
 import { loadQuizSet } from "./quizsets";
 import { SCHEMA } from "./schema";
@@ -212,6 +214,70 @@ export class RoomDO extends DurableObject<Env> {
       .map((r) => JSON.parse(r.detail) as LogEntry);
   }
 
+  /**
+   * 이번 턴에 지금 차례 팀이 한 일을 fx 테이블에 남긴다.
+   *
+   * `events.at >= room.last_turn_at` 이 곧 "이번 턴"이다. 턴이 시작될 때 last_turn_at 을 새로
+   * 찍기 때문이다(advanceTurn 끝의 UPDATE). 그래서 **턴이 넘어가기 직전에** 불러야 한다.
+   * 넘어간 뒤에 부르면 그 경계가 이미 지워져 있다.
+   *
+   * 같은 턴에 두 번 불릴 수 있다 — 라운드 한계에 닿으면 advanceTurn 이 endGame 을 부르고
+   * 둘 다 이 함수를 지난다. turnKey 로 막는다.
+   */
+  private captureFx(): void {
+    const room = this.needRoom();
+    if (!room.turn_team || !room.last_turn_at) return; // 첫 [시작] 에는 직전 턴이 없다
+
+    const key = turnKey(room.turn_team, room.round);
+    const prev = this.sql
+      .exec<{ detail: string }>("SELECT detail FROM fx WHERE team = ?", room.turn_team)
+      .toArray()[0];
+    if (prev && (JSON.parse(prev.detail) as TurnFx).turnKey === key) return; // 이미 떴다
+
+    const done = this.sql
+      .exec<{ detail: string }>(
+        "SELECT detail FROM events WHERE kind = 'answer' AND at >= ? ORDER BY id",
+        room.last_turn_at,
+      )
+      .toArray()
+      .map((r) => JSON.parse(r.detail) as LogEntry)
+      // 맞힌 것만 센다. 틀린 것을 교실 TV 에 이름과 함께 띄우지 않는다.
+      .filter((e) => e.ok && e.team === room.turn_team);
+
+    const names: Partial<Record<FxKind, string[]>> = {};
+    const push = (kind: FxKind, name: string) => {
+      const list = (names[kind] ??= []);
+      if (!list.includes(name)) list.push(name);
+    };
+
+    let normal = 0;
+    for (const e of done) {
+      // 정본이 실제로 바꾼 것만 말한다.
+      // 배포 직전에 채점된 답에는 bonus·stolen 이 없을 수 있으므로 기본값을 정해 둔다.
+      if (e.type === "T") push((e.bonus ?? 0) > 0 ? "treasure-bonus" : "treasure-claim", e.name);
+      else if (e.type === "A") push((e.stolen ?? null) !== null ? "attack-steal" : "attack-claim", e.name);
+      else if (e.type === "S") push("storm", e.name);
+      else normal++;
+    }
+
+    const fx: TurnFx = { turnKey: key, round: room.round, normal, names };
+    this.sql.exec(
+      `INSERT INTO fx (team, detail, at) VALUES (?, ?, ?)
+         ON CONFLICT(team) DO UPDATE SET detail = excluded.detail, at = excluded.at`,
+      room.turn_team,
+      JSON.stringify(fx),
+      Date.now(),
+    );
+  }
+
+  private fxAll(): { H: TurnFx | null; C: TurnFx | null } {
+    const out: { H: TurnFx | null; C: TurnFx | null } = { H: null, C: null };
+    for (const r of this.sql.exec<{ team: Team; detail: string }>("SELECT team, detail FROM fx").toArray()) {
+      out[r.team] = JSON.parse(r.detail) as TurnFx;
+    }
+    return out;
+  }
+
   private onlineIds(): string[] {
     const out: string[] = [];
     for (const ws of this.ctx.getWebSockets()) {
@@ -302,6 +368,7 @@ export class RoomDO extends DurableObject<Env> {
       iAmSkipping: me ? me.skip_turn_key === turnKey(room.turn_team, room.round) : false,
       myLastResult: me?.last_action_result ? JSON.parse(me.last_action_result) : null,
       maxPlayers: maxPlayers(room.rows, room.cols),
+      turnFx: this.fxAll(),
     };
   }
 
@@ -337,6 +404,10 @@ export class RoomDO extends DurableObject<Env> {
       turnEndsAt: room.turn_ends_at,
       players: this.publicPlayers(),
       cellLocks: this.lockMap(),
+      // 학생에게도 그냥 간다. 이 메시지는 한 번 만들어 전원에게 뿌리는 구조라 선생님만 골라
+      // 보내려면 소켓마다 따로 만들어야 하는데, 실을 것은 이름 몇 개와 숫자뿐이고
+      // 학생 화면은 이 값을 아예 안 읽는다. 연출 하나 때문에 방송 경로를 복잡하게 만들지 않는다.
+      turnFx: this.fxAll(),
     };
   }
 
@@ -576,6 +647,7 @@ export class RoomDO extends DurableObject<Env> {
     // 타이머가 시간이 다 돼서 넘기는 것은 연타가 아니다. 여기서 막으면 알람이 예외로 죽고,
     // 죽은 알람은 런타임이 계속 재시도해서 턴이 영영 안 넘어간다.
 
+    this.captureFx(); // last_turn_at 이 덮어써지기 전에 이번 턴을 갈무리한다
     this.clearAttempts();
     const next = nextTurn(room.turn_team, room.round);
     if (next.round > room.round_limit) {
@@ -613,6 +685,9 @@ export class RoomDO extends DurableObject<Env> {
     const winner = winnerOf(scores.H.total, scores.C.total);
     const roster = this.players();
 
+    // [종료] 버튼은 advanceTurn 을 안 거친다. 여기서 갈무리하지 않으면 마지막 턴에 터진
+    // 보물이 화면에서 사라진 채로 게임이 끝난다. (자동 종료 경로에서 두 번 불려도 안전하다)
+    this.captureFx();
     this.clearAttempts();
     this.sql.exec("UPDATE room SET status = 'ended', turn_ends_at = NULL WHERE id = 1");
     // 명단은 지우지 않는다. 예전에는 여기서 비웠는데, 그러면 게임이 끝나는 순간
@@ -662,6 +737,7 @@ export class RoomDO extends DurableObject<Env> {
                           last_action_id = NULL, last_action_result = NULL`,
     );
     this.sql.exec("DELETE FROM events");
+    this.sql.exec("DELETE FROM fx"); // 지난 게임의 3D 결과가 새 판에 남으면 안 된다
     this.sql.exec(
       `UPDATE room SET status = 'waiting', game_id = ?, round = 1, turn_team = NULL, turn_ends_at = NULL,
                        bonus_h = 0, bonus_c = 0, last_turn_at = NULL WHERE id = 1`,
@@ -846,6 +922,9 @@ export class RoomDO extends DurableObject<Env> {
     );
     this.addEvent("answer", me.id, cell, {
       at: Date.now(), name: me.name, team: me.team, cell, ok: correct, gain, type: target.type,
+      // bonus·stolen 을 함께 남긴다. 이게 없으면 턴 요약이 "보물 +2"·"땅을 빼앗았다"를
+      // 실제로 그런 일이 없었을 때도 말하게 된다. gain 에서 보너스는 역산되지만 stolen 은 안 된다.
+      bonus, stolen,
     } satisfies LogEntry);
     this.bump();
 

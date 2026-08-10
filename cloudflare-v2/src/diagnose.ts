@@ -7,7 +7,10 @@
 import { requireTeacher } from "./auth";
 import { json } from "./http";
 
-export const BUILD = "2026-08-09b"; // public/app.js 의 APP_BUILD 와 같아야 한다
+export const BUILD = "2026-08-10b"; // public/app.js 의 APP_BUILD, index.html 의 ?v= 와 같아야 한다
+
+/** 선생님 화면 3D 무대에 쓰는 그림. 배포에서 빠지면 이모지로 떨어진다. */
+export const FX_KINDS = ["search", "treasure", "storm", "attack"] as const;
 
 export interface Check {
   name: string;
@@ -56,7 +59,22 @@ export async function handleDiagnose(request: Request, env: Env): Promise<Respon
     }
   }
 
-  // ③ 열려 있는 방
+  // ③ 3D 그림 — 없어도 게임은 돌지만(이모지로 떨어진다) 수업 전에 알 수 있어야 한다
+  const missing: string[] = [];
+  for (const kind of FX_KINDS) {
+    for (const team of ["H", "C"]) {
+      const res = await env.ASSETS.fetch(new URL(`/assets/fx/${kind}-${team}.webp`, request.url));
+      if (!res.ok) missing.push(`${kind}-${team}`);
+    }
+  }
+  if (missing.length) {
+    add("3D 그림", "warn", `${missing.length}장이 없습니다 (${missing.join(", ")}). 그 자리는 이모지로 나옵니다.`,
+      "배포가 덜 올라간 것입니다. 다시 배포해 주세요.");
+  } else {
+    add("3D 그림", "ok", "8장 모두 정상입니다.");
+  }
+
+  // ④ 열려 있는 방
   const { results: rooms } = await env.DB.prepare(
     "SELECT code, label FROM rooms WHERE teacher_id = ? AND status = 'ready' ORDER BY last_active_at DESC",
   )
@@ -69,7 +87,7 @@ export async function handleDiagnose(request: Request, env: Env): Promise<Respon
     add("열려 있는 방", "ok", rooms.map((r) => `${r.code}${r.label ? `(${r.label})` : ""}`).join(", "));
   }
 
-  // ④ 방마다 자세히
+  // ⑤ 방마다 자세히
   for (const r of rooms) {
     const d = await env.ROOM.getByName(r.code).diagnose();
     const where = `방 ${r.code}`;
