@@ -131,7 +131,16 @@ function pickable(state) {
 
 let ROOM = "";
 
-const stats = { picked: 0, answered: 0, correct: 0, wrongGraded: 0, dupIgnored: 0, gaps: 0, fxChecked: 0, fxWrong: 0, errors: {} };
+const stats = { picked: 0, answered: 0, correct: 0, wrongGraded: 0, dupIgnored: 0, gaps: 0,
+  fxChecked: 0, fxWrong: 0, errors: {}, pickMs: [], ansMs: [] };
+
+/** 교실에서 실제로 느껴지는 것은 이 숫자다 — 칸을 누르고 문제가 뜰 때까지, 답을 내고 결과가 뜰 때까지. */
+function ms(list) {
+  if (!list.length) return "-";
+  const a = [...list].sort((x, y) => x - y);
+  const avg = Math.round(a.reduce((s, v) => s + v, 0) / a.length);
+  return `평균 ${avg}ms · 중앙 ${a[Math.floor(a.length / 2)]}ms · 95% ${a[Math.floor(a.length * 0.95)]}ms · 최대 ${a[a.length - 1]}ms`;
+}
 
 /**
  * 3D 무대에 올라갈 턴 요약이 실제 채점과 맞는지 본다.
@@ -257,8 +266,10 @@ async function main() {
 
       s.quiz = null;
       s.lastError = null;
+      const tPick = Date.now();
       s.send({ t: "pick", cell, actionId: uid() });
       await s.waitUntil(() => s.quiz || s.lastError);
+      if (s.quiz) stats.pickMs.push(Date.now() - tPick);
       if (!s.quiz) { const k = s.lastError?.code ?? "응답없음"; stats.errors[k] = (stats.errors[k] ?? 0) + 1; continue; }
       stats.picked++;
 
@@ -266,8 +277,10 @@ async function main() {
       const shown = s.quiz;
       const before = s.results.length;
       const actionId = uid();
+      const tAns = Date.now();
       s.send({ t: "answer", cell, choice: 0, actionId });
       await s.waitUntil(() => s.results.length > before);
+      if (s.results.length > before) stats.ansMs.push(Date.now() - tAns);
       // 같은 actionId 로 한 번 더 — 끊겼다 다시 보내는 상황을 흉내 낸다
       s.send({ t: "answer", cell, choice: 0, actionId });
       await s.waitUntil(() => s.results.length > before + 1);
@@ -302,6 +315,8 @@ async function main() {
   console.log(`재시도를 한 번만 반영 ${stats.dupIgnored}/${stats.answered}  ← 같아야 한다`);
   console.log(`순번(rev) 건너뜀 ${stats.gaps}  ← 0 이어야 한다`);
   console.log(`턴 요약 어긋남 ${stats.fxWrong}/${stats.fxChecked}  ← 0 이어야 한다`);
+  console.log(`칸 누름 → 문제  ${ms(stats.pickMs)}`);
+  console.log(`답 제출 → 결과  ${ms(stats.ansMs)}`);
   console.log(`학생 화면이 본 마지막 점수: 홍 ${s0.scores.H.total} : 청 ${s0.scores.C.total}  ← 선생님과 같아야 한다`);
   if (Object.keys(stats.errors).length) console.log("거절:", stats.errors);
 
