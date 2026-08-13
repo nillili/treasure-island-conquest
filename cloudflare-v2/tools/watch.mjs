@@ -15,6 +15,7 @@
  * Ctrl+C 로 끝낸다.
  */
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -144,7 +145,8 @@ function connect() {
     backoff = 500;
     ws.send(JSON.stringify({ t: "hello", role: "teacher" }));
     say(`감시 시작 · 방 ${ROOM} · ${BASE}`);
-    if (logPath) say(`기록: ${logPath.pathname}`);
+    // pathname 을 그대로 쓰면 경로의 한글이 퍼센트 인코딩되어, 나중에 그 줄을 보고 파일을 못 찾는다.
+    if (logPath) say(`기록: ${fileURLToPath(logPath)}`);
   });
   ws.addEventListener("message", (ev) => {
     if (ev.data === "PONG") return;
