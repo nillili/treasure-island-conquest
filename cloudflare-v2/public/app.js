@@ -27,7 +27,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-08-10b";
+const APP_BUILD = "2026-08-13";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -603,6 +603,9 @@ async function loadHome() {
   const me = await api("/api/auth/me");
   APP.teacher = me;
   $("teacher-name").textContent = `${me.name} 선생님`;
+  // 톱니바퀴는 슈퍼관리자에게만. 서버도 /api/admin/* 을 따로 막으므로
+  // 여기서 숨기는 것은 잠금장치가 아니라 화면을 어지럽히지 않으려는 것이다.
+  $("super-open").classList.toggle("hidden", !me.isSuper);
   showScreen("teacher-home");
   await Promise.all([loadSets(), loadRooms()]);
   updateSizeHint();
@@ -718,6 +721,13 @@ document.addEventListener("click", async (event) => {
     $("upload-problems").classList.add("hidden");
     return openModal("upload-modal");
   }
+
+  if (t.closest("#super-open")) return openSuper();
+  if (t.closest("#super-refresh")) return openSuper();
+  const teacherRow = t.closest("[data-teacher]");
+  if (teacherRow) return toggleTeacher(teacherRow.dataset.teacher);
+  const quizBtn = t.closest("[data-quiz]");
+  if (quizBtn) return previewOtherQuiz(quizBtn.dataset.quiz);
 
   if (t.closest("#diagnose")) return runDiagnose();
   if (t.closest("#preview-set")) return previewSet();
@@ -954,6 +964,160 @@ async function createRoom() {
 
 for (const id of ["cfg-rows", "cfg-cols"]) $(id).addEventListener("input", updateSizeHint);
 $("quizsets").addEventListener("change", updateSizeHint);
+
+// ── 관제 (슈퍼관리자 전용) ─────────────────────────────────────────────────
+// 이 화면은 "누가 잘했나"를 묻지 않는다. "언제 했고, 잘 돌았나"만 묻는다.
+// 그래서 학생 이름은 서버에도 없고 여기에도 나오지 않는다.
+const SUP = { open: null }; // 펼쳐 둔 선생님 아이디
+
+function supTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const supRate = (correct, solved) => (solved ? `${Math.round((correct / solved) * 100)}%` : "—");
+
+/** 이상 징후를 한 칸에 요약한다. 자세한 것은 펼쳤을 때 목록으로 보인다. */
+function supLevel(g) {
+  if (g.level === "error") return '<span class="sup-chip error">오류</span>';
+  if (g.level === "warn") return `<span class="sup-chip warn">확인 ${g.issues.length}</span>`;
+  return '<span class="sup-chip ok">정상</span>';
+}
+
+function supGames(games, withTeacher) {
+  if (!games.length) return '<div class="sup-empty">아직 끝난 수업이 없습니다.</div>';
+  return `<table class="sup-table">
+    <tr><th>끝난 때</th><th>방</th>${withTeacher ? "<th>선생님</th>" : ""}<th>퀴즈</th>
+        <th>결과</th><th class="num">인원</th><th class="num">정답률</th><th>상태</th></tr>
+    ${games.map((g) => `<tr>
+      <td>${supTime(g.endedAt)}</td>
+      <td>${esc(g.roomCode)}${g.label ? `<br><small>${esc(g.label)}</small>` : ""}</td>
+      ${withTeacher ? `<td>${esc(g.teacherId ?? "—")}</td>` : ""}
+      <td>${esc(g.quizTitle ?? "—")}</td>
+      <td>홍 ${g.scores.H} : 청 ${g.scores.C}<br><small>${esc(g.winner)} · ${g.rounds}/${g.roundLimit}R</small></td>
+      <td class="num">${g.playerCount}</td>
+      <td class="num">${supRate(g.correct, g.solved)}</td>
+      <td>${supLevel(g)}${g.issues.length
+        ? `<ul class="sup-issues">${g.issues.map((i) => `<li>${esc(i.detail)}</li>`).join("")}</ul>`
+        : ""}</td>
+    </tr>`).join("")}
+  </table>`;
+}
+
+function supRender(d) {
+  $("super-when").textContent = `· ${supTime(d.serverNow)} 기준`;
+
+  const rooms = d.openRooms.length
+    ? `<table class="sup-table">
+        <tr><th>방</th><th>반</th><th>선생님</th><th>퀴즈</th><th>지금</th><th>연 때</th></tr>
+        ${d.openRooms.map((r) => `<tr>
+          <td class="sup-name">${esc(r.code)}</td>
+          <td>${esc(r.label ?? "—")}</td>
+          <td>${esc(r.teacherName ?? r.teacherId)}</td>
+          <td>${esc(r.quizTitle ?? "—")}</td>
+          <td>${r.live
+            ? `<span class="sup-chip live">${esc(r.live.status)}</span> 학생 ${r.live.players}명 · 접속 ${r.live.online}`
+            : '<span class="sup-chip error">응답 없음</span>'}</td>
+          <td>${supTime(r.createdAt)}</td>
+        </tr>`).join("")}
+      </table>`
+    : '<div class="sup-empty">지금 열려 있는 방이 없습니다.</div>';
+
+  const teachers = `<table class="sup-table">
+    <tr><th>선생님</th><th class="num">퀴즈</th><th class="num">수업</th>
+        <th>마지막 수업</th><th>마지막 로그인</th><th class="num">열린 방</th></tr>
+    ${d.teachers.map((t) => `<tr class="sup-row${SUP.open === t.id ? " on" : ""}" data-teacher="${esc(t.id)}">
+      <td><span class="sup-name">${esc(t.name)}</span> <small>${esc(t.id)}</small>
+          ${t.isSuper ? '<span class="sup-chip super">관리자</span>' : ""}</td>
+      <td class="num">${t.quizCount}</td>
+      <td class="num">${t.gameCount}</td>
+      <td>${supTime(t.lastGameAt)}</td>
+      <td>${supTime(t.lastLoginAt)}</td>
+      <td class="num">${t.openRooms || "—"}</td>
+    </tr>`).join("")}
+  </table>
+  <div id="super-detail"></div>`;
+
+  $("super-body").innerHTML =
+    `<div class="sup-sec"><h3>지금 열려 있는 방 (${d.openRooms.length})</h3>${rooms}</div>
+     <div class="sup-sec"><h3>선생님 (${d.teachers.length}명) — 줄을 누르면 펼쳐집니다</h3>${teachers}</div>
+     <div class="sup-sec"><h3>최근 수업 (${d.recentGames.length})</h3>${supGames(d.recentGames, true)}</div>
+     <div class="sup-note">수업 기록에는 학생 이름이 들어가지 않습니다. 60일이 지나면 자동으로 지워집니다.</div>`;
+
+  if (SUP.open) supDetail(SUP.open);
+}
+
+async function openSuper() {
+  openModal("super-modal");
+  $("super-body").innerHTML = '<div class="sup-empty">불러오는 중…</div>';
+  try {
+    supRender(await api("/api/admin/overview"));
+  } catch (err) {
+    $("super-body").innerHTML = `<div class="warning hot">관제 정보를 읽지 못했습니다 — ${esc(err.message)}</div>`;
+  }
+}
+
+async function toggleTeacher(id) {
+  if (SUP.open === id) {
+    SUP.open = null;
+    $("super-detail").innerHTML = "";
+    for (const el of document.querySelectorAll(".sup-row.on")) el.classList.remove("on");
+    return;
+  }
+  SUP.open = id;
+  for (const el of document.querySelectorAll("[data-teacher]")) {
+    el.classList.toggle("on", el.dataset.teacher === id);
+  }
+  await supDetail(id);
+}
+
+async function supDetail(id) {
+  const box = $("super-detail");
+  if (!box) return;
+  box.innerHTML = '<div class="sup-empty">불러오는 중…</div>';
+  let d;
+  try {
+    d = await api(`/api/admin/teachers/${encodeURIComponent(id)}`);
+  } catch (err) {
+    box.innerHTML = `<div class="warning hot">${esc(err.message)}</div>`;
+    return;
+  }
+
+  const quizzes = d.quizSets.length
+    ? `<ul class="sup-quiz">${d.quizSets.map((s) => `<li>
+        <span><b>${esc(s.title)}</b> <small>${s.itemCount}문항${s.skipped ? ` · 건너뜀 ${s.skipped}` : ""}
+          · ${supTime(s.updatedAt)}</small></span>
+        <button class="button muted" data-quiz="${s.id}">훑어보기</button>
+      </li>`).join("")}</ul>`
+    : '<div class="sup-empty">올려 둔 퀴즈가 없습니다.</div>';
+
+  box.innerHTML = `<div class="sup-detail">
+    <h3>📚 ${esc(d.teacher.name)} 선생님의 퀴즈 (${d.quizSets.length}) — 보기만 합니다</h3>
+    ${quizzes}
+    <h3 style="margin-top:12px">🎮 지난 수업 (${d.games.length})</h3>
+    ${supGames(d.games, false)}
+  </div>`;
+}
+
+async function previewOtherQuiz(id) {
+  showInfo("📖 퀴즈 훑어보기", "<p>불러오는 중…</p>");
+  try {
+    const q = await api(`/api/admin/quizsets/${id}`);
+    $("info-title").textContent = `📖 ${q.title}`;
+    $("info-body").innerHTML =
+      `<p><b>${esc(q.teacherName ?? q.teacherId)}</b> 선생님 · ${q.itemCount}문항
+        ${q.skipped ? ` · 건너뜀 ${q.skipped}` : ""}</p>
+       <div class="diag-list">${q.preview.map((it, i) => `<div class="diag">
+         <b>${i + 1}. ${esc(it.q)}</b>
+         <span>${it.options.map((o, k) => `${k === it.ans ? "✅" : "·"} ${esc(o)}`).join("<br>")}</span>
+       </div>`).join("")}</div>
+       <div class="sup-note">앞 ${q.preview.length}문항만 보여 줍니다. 고치거나 지울 수는 없습니다.</div>`;
+  } catch (err) {
+    $("info-body").innerHTML = `<div class="warning hot">${esc(err.message)}</div>`;
+  }
+}
 
 // 새로고침해도 하던 자리로 돌아온다.
 (async () => {

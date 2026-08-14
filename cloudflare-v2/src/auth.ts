@@ -6,7 +6,7 @@
  * (docs/plan_DB로전환_v3.md 2-6).
  */
 import { fail, json, readJson, str } from "./http";
-import { sweepStaleRooms } from "./sweep";
+import { sweepOldRecords, sweepStaleRooms } from "./sweep";
 import { seedSampleQuiz } from "./quizsets";
 
 const COOKIE = "tsession";
@@ -69,6 +69,22 @@ export async function requireTeacher(request: Request, env: Env): Promise<string
   return teacherId ?? fail("선생님 로그인이 필요합니다.", 401, "no-session");
 }
 
+/**
+ * 슈퍼관리자만 지나갈 수 있는 문.
+ *
+ * 로그인하지 않은 사람과 권한이 없는 선생님을 굳이 갈라서 알려 주지 않는다.
+ * 관제 화면이 있다는 사실 자체가 보통 선생님에게 드러날 이유가 없다.
+ */
+export async function requireSuper(request: Request, env: Env): Promise<string | Response> {
+  const teacherId = await teacherFromCookie(request, env);
+  if (!teacherId) return fail("선생님 로그인이 필요합니다.", 401, "no-session");
+  const row = await env.DB.prepare("SELECT is_super FROM teachers WHERE id = ?")
+    .bind(teacherId)
+    .first<{ is_super: number }>();
+  if (!row?.is_super) return fail("없는 주소입니다.", 404);
+  return teacherId;
+}
+
 async function startSession(request: Request, env: Env, teacherId: string): Promise<Response> {
   const now = Date.now();
   const token = crypto.randomUUID();
@@ -83,12 +99,14 @@ async function startSession(request: Request, env: Env, teacherId: string): Prom
   // 어제 방도 여기서 함께 치운다. 상주하는 데몬이 없어서 누군가 들어오는 순간이 유일한 기회다.
   // 치울 게 없으면 SELECT 한 번이라 로그인이 느려지지 않는다.
   await sweepStaleRooms(env);
+  // 두 달 지난 수업 기록도 같은 자리에서 함께 걷는다. 로그인 때만 돈다 — 홈을 열 때마다 할 일은 아니다.
+  await sweepOldRecords(env);
 
-  const teacher = await env.DB.prepare("SELECT id, display_name FROM teachers WHERE id = ?")
+  const teacher = await env.DB.prepare("SELECT id, display_name, is_super FROM teachers WHERE id = ?")
     .bind(teacherId)
-    .first<{ id: string; display_name: string }>();
+    .first<{ id: string; display_name: string; is_super: number }>();
   return json(
-    { ok: true, id: teacher!.id, name: teacher!.display_name },
+    { ok: true, id: teacher!.id, name: teacher!.display_name, isSuper: !!teacher!.is_super },
     200,
     { "set-cookie": sessionCookie(request, token, SESSION_MS / 1000) },
   );
@@ -98,11 +116,11 @@ export async function handleAuth(request: Request, env: Env, path: string): Prom
   if (path === "/api/auth/me") {
     const teacherId = await teacherFromCookie(request, env);
     if (!teacherId) return fail("로그인되어 있지 않습니다.", 401, "no-session");
-    const row = await env.DB.prepare("SELECT id, display_name FROM teachers WHERE id = ?")
+    const row = await env.DB.prepare("SELECT id, display_name, is_super FROM teachers WHERE id = ?")
       .bind(teacherId)
-      .first<{ id: string; display_name: string }>();
+      .first<{ id: string; display_name: string; is_super: number }>();
     if (!row) return fail("로그인되어 있지 않습니다.", 401, "no-session");
-    return json({ ok: true, id: row.id, name: row.display_name });
+    return json({ ok: true, id: row.id, name: row.display_name, isSuper: !!row.is_super });
   }
 
   if (request.method !== "POST") return fail("POST 로 보내 주세요.", 405);

@@ -84,6 +84,16 @@ export interface ErrorMessage {
   serverNow: number;
 }
 
+/**
+ * 끝난 판에 남는 이상 징후. 관제 화면이 "오류 여부" 로 읽는다.
+ * 사람 이름은 담지 않는다 — 몇 명인지까지만 센다.
+ */
+export interface GameIssue {
+  kind: "server-error" | "short" | "empty" | "no-answer" | "stalled" | "offline";
+  level: "warn" | "error";
+  detail: string;
+}
+
 export const ERROR_CODES = {
   needHello: "need-hello",
   notOwner: "not-owner",

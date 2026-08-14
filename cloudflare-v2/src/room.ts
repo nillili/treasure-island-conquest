@@ -21,6 +21,7 @@ import {
   ERROR_CODES as E,
   type ClientMessage,
   type FxKind,
+  type GameIssue,
   type LogEntry,
   type PublicCell,
   type PublicPlayer,
@@ -84,6 +85,7 @@ interface RoomRow {
   last_cmd_id: string | null;
   last_cmd_result: string | null;
   provision_id: string | null;
+  created_at: number;
   last_active_at: number;
 }
 
@@ -683,12 +685,112 @@ export class RoomDO extends DurableObject<Env> {
     return { ended: false };
   }
 
-  /** 게임을 끝내고 결과를 만든다. 결과는 남기지 않고 그 자리에서 보여 준다. */
+  /**
+   * 이 판이 잘 돌았는지 훑는다. 관제 화면의 "오류 여부" 가 여기서 나온다.
+   *
+   * 이름은 한 글자도 담지 않는다 — 몇 명인지만 센다.
+   * 누가 멈췄는지는 수업 중에 watch.mjs 가 실시간으로 알려 주는 몫이고,
+   * 여기 남는 것은 나중에 "그날 뭔가 이상했나" 를 되짚기 위한 표시다.
+   */
+  private gameIssues(room: RoomRow, roster: PlayerRow[]): GameIssue[] {
+    const issues: GameIssue[] = [];
+
+    const errors = this.sql
+      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE kind = 'error'")
+      .toArray()[0]?.n ?? 0;
+    if (errors) {
+      issues.push({ kind: "server-error", level: "error", detail: `서버 오류 ${errors}건이 기록되었습니다.` });
+    }
+
+    if (room.round < room.round_limit) {
+      issues.push({
+        kind: "short",
+        level: "warn",
+        detail: `${room.round_limit}라운드로 정했는데 ${room.round}라운드에서 끝났습니다.`,
+      });
+    }
+
+    if (!roster.length) {
+      issues.push({ kind: "empty", level: "warn", detail: "학생이 한 명도 없이 끝났습니다." });
+      return issues;
+    }
+
+    const silent = roster.filter((p) => p.solved === 0).length;
+    if (silent) {
+      issues.push({ kind: "no-answer", level: "warn", detail: `한 번도 답을 내지 않은 학생 ${silent}명.` });
+    }
+
+    // 처음엔 풀다가 도중에 조용해진 학생. 마지막으로 푼 라운드가 끝보다 세 라운드 이상 앞서면
+    // 화면이 멈췄거나 손을 놓은 것이다. 수업 중 watch.mjs 가 ⛔ 로 잡던 것을 기록에도 남긴다.
+    const stalled = roster.filter((p) => {
+      if (p.solved === 0) return false; // 위에서 이미 셌다
+      const round = Number(String(p.last_played_turn_key ?? "").split(":")[1] ?? 0);
+      return round > 0 && room.round - round >= 3;
+    }).length;
+    if (stalled) {
+      issues.push({ kind: "stalled", level: "warn", detail: `중간에 멈춘 것으로 보이는 학생 ${stalled}명.` });
+    }
+
+    // 접속 여부는 WebSocket 이 붙어 있는지로만 알 수 있다. 그런데 소켓이 막힌 교실에서는
+    // 화면이 폴링으로 떨어지고, 그때는 멀쩡히 수업 중인 학생도 '끊김'으로 보인다.
+    // 한 명도 안 붙어 있으면 '전원 폴백'인지 '전원 퇴장'인지 가릴 수 없으므로 아무 말도 하지 않는다.
+    // 못 가리는 것을 단정해 적으면, 나중에 이 기록을 믿고 엉뚱한 데를 파게 된다.
+    const online = new Set(this.onlineIds());
+    if (online.size) {
+      const offline = roster.filter((p) => !online.has(p.id)).length;
+      if (offline) {
+        issues.push({ kind: "offline", level: "warn", detail: `끝날 때 접속이 끊겨 있던 학생 ${offline}명.` });
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * 끝난 판을 D1 에 한 줄로 남긴다. 학생 이름은 넣지 않는다(2026-08-09 결정).
+   *
+   * 기록에 실패해도 게임은 이미 끝났다. 여기서 예외가 새어 나가면 결과 화면이 안 뜨므로
+   * 삼키고 사건으로만 남긴다 — 수업을 망치는 것보다 기록 한 줄을 잃는 편이 낫다.
+   */
+  private recordGame(room: RoomRow, scores: Scores, winner: string, roster: PlayerRow[]): void {
+    const gameKey = room.game_id;
+    if (!gameKey) return; // [새 게임]을 누른 적이 없는 판. 남길 것이 없다.
+
+    const startedAt = Number.parseInt(gameKey.slice(2), 36) || room.created_at;
+    const issues = this.gameIssues(room, roster);
+    const solved = roster.reduce((n, p) => n + p.solved, 0);
+    const correct = roster.reduce((n, p) => n + p.correct, 0);
+
+    this.ctx.waitUntil(
+      this.env.DB.prepare(
+        `INSERT OR IGNORE INTO game_records
+           (room_code, game_key, teacher_id, label, quiz_title, started_at, ended_at,
+            rounds, round_limit, h_total, c_total, winner, player_count, solved, correct, issues_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+        .bind(
+          room.code, gameKey, room.teacher_id, room.label, room.quiz_title, startedAt, Date.now(),
+          room.round, room.round_limit, scores.H.total, scores.C.total, winner,
+          roster.length, solved, correct, JSON.stringify(issues),
+        )
+        .run()
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          this.addEvent("error", null, null, { where: "recordGame", msg: String(err) });
+        }),
+    );
+  }
+
+  /** 게임을 끝내고 결과를 만든다. 학생별 결과는 그 자리에서 보여 주고, 서버에는 집계만 남는다. */
   private endGame(): unknown {
     const room = this.needRoom();
     const scores = this.scores(room);
     const winner = winnerOf(scores.H.total, scores.C.total);
     const roster = this.players();
+
+    // 명단을 비우기 전에 남긴다. 아래 UPDATE 가 last_played_turn_key 를 지우면
+    // "중간에 멈춘 학생" 을 셀 수 없게 된다.
+    this.recordGame(room, scores, winner, roster);
 
     // [종료] 버튼은 advanceTurn 을 안 거친다. 여기서 갈무리하지 않으면 마지막 턴에 터진
     // 보물이 화면에서 사라진 채로 게임이 끝난다. (자동 종료 경로에서 두 번 불려도 안전하다)

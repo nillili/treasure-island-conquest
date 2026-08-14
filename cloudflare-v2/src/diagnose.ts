@@ -7,7 +7,7 @@
 import { requireTeacher } from "./auth";
 import { json } from "./http";
 
-export const BUILD = "2026-08-10b"; // public/app.js 의 APP_BUILD, index.html 의 ?v= 와 같아야 한다
+export const BUILD = "2026-08-13"; // public/app.js 의 APP_BUILD, index.html 의 ?v= 와 같아야 한다
 
 /** 선생님 화면 3D 무대에 쓰는 그림. 배포에서 빠지면 이모지로 떨어진다. */
 export const FX_KINDS = ["search", "treasure", "storm", "attack"] as const;

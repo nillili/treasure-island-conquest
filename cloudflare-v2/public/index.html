@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-08-10b">
-<script src="/net.js?v=2026-08-10b" defer></script>
-<script src="/app.js?v=2026-08-10b" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-08-13">
+<script src="/net.js?v=2026-08-13" defer></script>
+<script src="/app.js?v=2026-08-13" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -68,6 +68,9 @@
     <span class="logo">🏝️ 보물섬</span>
     <span id="teacher-name"></span>
     <span class="push"></span>
+    <!-- 관제 — 슈퍼관리자에게만 보인다. loadHome() 이 me.isSuper 를 보고 켠다.
+         이 파일에서 admin- 은 이미 '선생님 진행 화면'을 뜻하므로 관제는 super- 로 적는다. -->
+    <button class="button muted hidden" id="super-open" title="관제 화면">⚙️</button>
     <button class="button muted" id="diagnose">🩺 시스템 점검</button>
     <button class="button muted" id="logout">로그아웃</button>
   </div>
@@ -141,6 +144,18 @@
     <div id="info-body"></div>
     <div class="modal-actions">
       <button class="button primary" data-close="info-modal">확인</button>
+    </div>
+  </div>
+</div>
+
+<!-- ⑥-2 관제 화면 — 슈퍼관리자 전용 ------------------------------------ -->
+<div id="super-modal" class="dim hidden">
+  <div class="modal widest">
+    <h2>⚙️ 관제 <small id="super-when"></small></h2>
+    <div id="super-body">불러오는 중…</div>
+    <div class="modal-actions">
+      <button class="button muted push" id="super-refresh">다시 읽기</button>
+      <button class="button primary" data-close="super-modal">닫기</button>
     </div>
   </div>
 </div>

@@ -1,3 +1,4 @@
+import { handleAdmin } from "./admin";
 import { handleAuth } from "./auth";
 import { handleDiagnose } from "./diagnose";
 import { fail } from "./http";
@@ -12,6 +13,7 @@ export default {
     const path = new URL(request.url).pathname;
 
     if (path.startsWith("/api/auth/")) return handleAuth(request, env, path);
+    if (path.startsWith("/api/admin/")) return handleAdmin(request, env, path);
     if (path === "/api/diagnose") return handleDiagnose(request, env);
     if (path.startsWith("/api/quizsets")) return handleQuizSets(request, env, path);
     if (path.startsWith("/api/rooms")) return handleRooms(request, env, path);

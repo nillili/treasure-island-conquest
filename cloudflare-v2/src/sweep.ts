@@ -58,3 +58,19 @@ export async function sweepStaleRooms(env: Env): Promise<string[]> {
 
   return closed;
 }
+
+/**
+ * 오래된 수업 기록을 지운다.
+ *
+ * 기록에 학생 이름은 없지만(migrations/0003), 그렇다고 영영 쌓을 이유도 없다.
+ * 관제 화면이 답하는 질문은 "요즘 잘 돌고 있나" 이고, 두 달이면 충분히 덮는다.
+ *
+ * 방 청소와 같은 자리에서 같은 이유로 돈다 — 상주하는 데몬이 없다.
+ */
+export const RECORD_KEEP_DAYS = 60;
+
+export async function sweepOldRecords(env: Env): Promise<number> {
+  const cutoff = Date.now() - RECORD_KEEP_DAYS * DAY;
+  const done = await env.DB.prepare("DELETE FROM game_records WHERE ended_at < ?").bind(cutoff).run();
+  return done.meta.changes ?? 0;
+}
