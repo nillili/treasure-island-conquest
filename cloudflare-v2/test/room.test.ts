@@ -643,8 +643,8 @@ describe("턴 요약 (3D 무대)", () => {
     const ids = await bothPlayers();
     const me = await whoseTurn(ids);
     const cell = pickableCell(me);
-    // 두 팀 다 이미 이 칸의 보너스를 받았다고 표시한다(1|2 = 3).
-    await inRoom("UPDATE cells SET type = 'T', bonus_taken = 3 WHERE idx = ?", cell);
+    // bonus_taken > 0 이면 이미 효과가 소진된 칸이다(값이 1이든 3이든 같다).
+    await inRoom("UPDATE cells SET type = 'T', bonus_taken = 1 WHERE idx = ?", cell);
     await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
     await rpc({ t: "answer", cell, choice: await answerOf(cell), actionId: "a", playerId: me.myPlayer!.id });
     await timeoutTurn();
@@ -678,6 +678,22 @@ describe("턴 요약 (3D 무대)", () => {
     await timeoutTurn();
 
     const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(fx.names["attack-claim"]).toHaveLength(1);
+    expect(fx.names["attack-steal"]).toBeUndefined();
+  });
+
+  it("💥 공격 효과는 첫 점령 때만 발동한다", async () => {
+    // bonus_taken = 1 이면 이미 소진된 공격 칸 → 빼앗기 없음
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    const cell = pickableCell(me);
+    await inRoom("UPDATE cells SET type = 'A', bonus_taken = 1 WHERE idx = ?", cell);
+    await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
+    await rpc({ t: "answer", cell, choice: await answerOf(cell), actionId: "a", playerId: me.myPlayer!.id });
+    await timeoutTurn();
+
+    const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    // 효과가 소진됐으므로 attack-steal 없이 attack-claim 만
     expect(fx.names["attack-claim"]).toHaveLength(1);
     expect(fx.names["attack-steal"]).toBeUndefined();
   });

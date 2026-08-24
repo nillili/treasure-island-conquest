@@ -1000,10 +1000,11 @@ export class RoomDO extends DurableObject<Env> {
     if (correct) {
       this.sql.exec("UPDATE cells SET owner = ?, owned_by = ? WHERE idx = ?", me.team, me.id, cell);
 
-      const bit = me.team === "H" ? 1 : 2;
-      if (target.type === "T" && !(target.bonus_taken & bit)) {
+      // 보물·공격은 처음 점령할 때 한 번만 발동한다. bonus_taken > 0 이면 이미 소진된 칸이다.
+      // 폭풍은 점령할 때마다 발동하므로 별도 플래그 없이 항상 건다.
+      if (target.type === "T" && !target.bonus_taken) {
         bonus = 2;
-        this.sql.exec("UPDATE cells SET bonus_taken = bonus_taken | ? WHERE idx = ?", bit, cell);
+        this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
         this.sql.exec(
           me.team === "H" ? "UPDATE room SET bonus_h = bonus_h + ? WHERE id = 1" : "UPDATE room SET bonus_c = bonus_c + ? WHERE id = 1",
           bonus,
@@ -1011,7 +1012,9 @@ export class RoomDO extends DurableObject<Env> {
       }
       this.sql.exec("UPDATE players SET pos = ? WHERE id = ?", cell, me.id);
       if (target.type === "S") this.sql.exec("UPDATE players SET skip_turns = 1 WHERE id = ?", me.id);
-      if (target.type === "A") {
+      if (target.type === "A" && !target.bonus_taken) {
+        // 첫 점령 때만 공격 효과 발동. 이후 재점령은 일반 땅처럼 취급한다.
+        this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
         stolen = pickStealTarget(this.cells().map((c) => c.owner), me.team);
         if (stolen !== null) {
           this.sql.exec("UPDATE cells SET owner = ?, owned_by = NULL WHERE idx = ?", me.team, stolen);
