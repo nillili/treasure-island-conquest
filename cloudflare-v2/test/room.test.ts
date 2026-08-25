@@ -698,6 +698,29 @@ describe("턴 요약 (3D 무대)", () => {
     expect(fx.names["attack-steal"]).toBeUndefined();
   });
 
+  it("⛈️ 폭풍은 재점령할 때도 매번 발동한다", async () => {
+    // 보물·공격과 갈리는 지점이 여기다. 그 둘은 bonus_taken 이 서면 두 번째 사람부터
+    // 효과가 없지만, 폭풍은 그 플래그를 아예 보지 않으므로 몇 번을 다시 뺏어도 매번 걸린다.
+    //
+    // 응답의 skipNextTurn 을 보면 안 된다 — 그 값은 bonus_taken 과 무관하게 따로 계산되어
+    // 규칙을 깨도 true 로 남는다(그렇게 짰다가 이 테스트가 통과해 버렸다).
+    // 실제로 쉬게 됐는지, 즉 skip_turns 가 섰는지를 봐야 한다.
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    const cell = pickableCell(me);
+    await inRoom("UPDATE cells SET type = 'S', bonus_taken = 1 WHERE idx = ?", cell);
+    await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
+    await rpc({ t: "answer", cell, choice: await answerOf(cell), actionId: "a", playerId: me.myPlayer!.id });
+
+    let skipTurns = 0;
+    await runInDurableObject(stub(), (_i, state) => {
+      skipTurns = state.storage.sql
+        .exec<{ s: number }>("SELECT skip_turns AS s FROM players WHERE id = ?", me.myPlayer!.id)
+        .one().s;
+    });
+    expect(skipTurns).toBe(1);
+  });
+
   it("⛈️ 폭풍은 이름과 함께 남는다", async () => {
     const ids = await bothPlayers();
     const me = await whoseTurn(ids);
