@@ -57,6 +57,7 @@ function toast(text) {
 const REPLY_TIMEOUT_MS = 5000;
 
 let stuckTimer = 0;
+let syncGuard = 0;
 
 /** 보낸 것의 답이 제때 오는지 지켜본다. 안 오면 스스로 풀어 준다. */
 function watchReply(what) {
@@ -416,7 +417,16 @@ function acceptRev(msg) {
   if (msg.stateRev === APP.rev + 1 || APP.rev < 0) { APP.rev = msg.stateRev; return true; }
   if (msg.stateRev > APP.rev + 1) {
     // sync 는 하나로 합친다. 40명이 동시에 놓쳤을 때 폭주하면 안 된다.
-    if (!APP.syncing) { APP.syncing = true; netSend({ t: "sync" }); }
+    //
+    // 다만 이 요청이 사라지면 syncing 이 영영 참으로 남는다. 그러면 그 뒤의 모든
+    // 갱신을 "순서가 어긋났다" 며 버리면서 다시 요청하지도 않아, 화면이 옛 판에
+    // 멈춘 채 조용히 굳는다. selectCell 과 같은 계열의 덫이라 같이 막는다.
+    if (!APP.syncing) {
+      APP.syncing = true;
+      clearTimeout(syncGuard);
+      syncGuard = setTimeout(() => { APP.syncing = false; }, REPLY_TIMEOUT_MS);
+      netSend({ t: "sync" }).catch(() => { APP.syncing = false; });
+    }
     return false;
   }
   return false; // 늦게 도착한 옛 메시지
@@ -426,6 +436,7 @@ function onMessage(msg) {
   applyClock(msg);
   switch (msg.t) {
     case "state": {
+      clearTimeout(syncGuard);
       APP.syncing = false;
       APP.rev = msg.stateRev;
       APP.state = msg;
