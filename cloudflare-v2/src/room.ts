@@ -8,9 +8,9 @@ import {
   assignRandomPositions,
   buildBoard,
   maxPlayers,
+  minSideFor,
   neighbors8,
   nextTurn,
-  pickStealTarget,
   placeLatePlayer,
   rescueTrapped,
   cellLabel,
@@ -192,6 +192,39 @@ export class RoomDO extends DurableObject<Env> {
     return this.sql.exec<CellRow>("SELECT * FROM cells ORDER BY idx").toArray();
   }
 
+  /**
+   * 인원이 홀수라 팀이 안 맞을 때, 적은 쪽에 얹어 주는 점수.
+   *
+   * 가상의 한 명이 **양 팀 전체 평균 정답률**로 따라간다고 본다. 전체 정답률이 70% 면
+   * 그 팀은 지나간 턴마다 0.7 점씩 쌓는다. 자기 팀 평균을 쓰면 잘하는 팀은 더 유리해지고
+   * 못하는 팀은 더 불리해져서, 공평하게 하려던 것이 거꾸로 된다.
+   *
+   * 표시할 때는 **소수점을 무조건 버린다**(0.7 → 0, 1.2 → 1, 9.6 → 9).
+   * 학생이 암산으로 따라올 수 있어야 해서 반올림하지 않는다.
+   */
+  private handicap(room: RoomRow): { H: number; C: number } {
+    const roster = this.players();
+    const h = roster.filter((p) => p.team === "H").length;
+    const c = roster.length - h;
+    if (h === c) return { H: 0, C: 0 };
+
+    const totals = this.sql
+      .exec<{ solved: number; correct: number }>(
+        "SELECT COALESCE(SUM(solved),0) AS solved, COALESCE(SUM(correct),0) AS correct FROM players",
+      )
+      .one();
+    if (!totals.solved) return { H: 0, C: 0 };
+
+    // 지나간 턴 수 = 그 팀이 실제로 차례를 가진 횟수. 아직 안 온 차례까지 세면 안 된다.
+    const turns = room.turn_team ? room.round - (room.turn_team === "H" ? 1 : 0) : 0;
+    if (turns <= 0) return { H: 0, C: 0 };
+
+    const rate = totals.correct / totals.solved;
+    const short = h < c ? "H" : "C";
+    const gained = Math.floor((c - h === 0 ? 0 : Math.abs(h - c)) * turns * rate);
+    return short === "H" ? { H: gained, C: 0 } : { H: 0, C: gained };
+  }
+
   private scores(room: RoomRow): Scores {
     const rows = this.sql
       .exec<{ owner: Team; n: number }>(
@@ -200,9 +233,18 @@ export class RoomDO extends DurableObject<Env> {
       .toArray();
     const territory = { H: 0, C: 0 };
     for (const r of rows) territory[r.owner] = r.n;
+    const evenUp = this.handicap(room);
     return {
-      H: { territory: territory.H, bonus: room.bonus_h, total: territory.H + room.bonus_h },
-      C: { territory: territory.C, bonus: room.bonus_c, total: territory.C + room.bonus_c },
+      H: {
+        territory: territory.H,
+        bonus: room.bonus_h + evenUp.H,
+        total: territory.H + room.bonus_h + evenUp.H,
+      },
+      C: {
+        territory: territory.C,
+        bonus: room.bonus_c + evenUp.C,
+        total: territory.C + room.bonus_c + evenUp.C,
+      },
     };
   }
 
@@ -257,10 +299,22 @@ export class RoomDO extends DurableObject<Env> {
       // 정본이 실제로 바꾼 것만 말한다.
       // 배포 직전에 채점된 답에는 bonus·stolen 이 없을 수 있으므로 기본값을 정해 둔다.
       if (e.type === "T") push((e.bonus ?? 0) > 0 ? "treasure-bonus" : "treasure-claim", e.name);
-      else if (e.type === "A") push((e.stolen ?? null) !== null ? "attack-steal" : "attack-claim", e.name);
+      // 공격칸은 이제 점령하는 순간 빼앗지 않고 "고를 권리" 만 준다. 실제로 빼앗은 것은
+      // 아래에서 steal 기록을 보고 따로 센다 — 고르는 것이 다음 턴으로 넘어갈 수도 있다.
+      else if (e.type === "A") push("attack-claim", e.name);
       else if (e.type === "S") push("storm", e.name);
       else normal++;
     }
+
+    // 이번 턴에 실제로 남의 땅을 가져간 사람. 공격칸을 먹은 턴과 다를 수 있다.
+    const robbed = this.sql
+      .exec<{ detail: string }>(
+        "SELECT detail FROM events WHERE kind = 'steal' AND at >= ? ORDER BY id",
+        room.last_turn_at,
+      )
+      .toArray()
+      .map((r) => JSON.parse(r.detail) as { name: string; team: Team });
+    for (const e of robbed) if (e.team === room.turn_team) push("attack-steal", e.name);
 
     const fx: TurnFx = { turnKey: key, round: room.round, normal, names };
     this.sql.exec(
@@ -365,11 +419,13 @@ export class RoomDO extends DurableObject<Env> {
             solved: me.solved,
             correct: me.correct,
             playedThisTurn: me.last_played_turn_key === turnKey(room.turn_team, room.round),
+            // 공격권은 서버가 들고 있다. 새로고침하거나 끊겼다 붙어도 이어서 고를 수 있어야 한다.
+            hasSteal: this.hasSteal(me.id),
           }
         : null,
       iAmSkipping: me ? me.skip_turn_key === turnKey(room.turn_team, room.round) : false,
       myLastResult: me?.last_action_result ? JSON.parse(me.last_action_result) : null,
-      maxPlayers: maxPlayers(room.rows, room.cols),
+      maxPlayers: maxPlayers(room.rows, room.cols, room.round_limit),
       turnFx: this.fxAll(),
     };
   }
@@ -826,8 +882,15 @@ export class RoomDO extends DurableObject<Env> {
     if (!quizCount) throw new Refused(E.noQuiz, "이 방에는 문항이 없습니다.");
 
     const roster = this.players();
-    if (roster.length > maxPlayers(room.rows, room.cols)) {
-      throw new Refused(E.roomFull, `학생이 너무 많습니다. 판을 키워 주세요.`);
+    const 정원 = maxPlayers(room.rows, room.cols, room.round_limit);
+    if (roster.length > 정원) {
+      // 그냥 "많습니다" 라고만 하면 선생님이 판을 얼마나 키워야 하는지 알 수 없다.
+      const 필요 = minSideFor(roster.length, room.round_limit);
+      throw new Refused(
+        E.roomFull,
+        `${roster.length}명은 ${room.rows}×${room.cols} 판에 많습니다(정원 ${정원}명). ` +
+          `${필요}×${필요} 이상으로 새 방을 만들어 주세요.`,
+      );
     }
 
     const board = buildBoard(
@@ -893,8 +956,8 @@ export class RoomDO extends DurableObject<Env> {
     }
 
     const roster = this.players();
-    if (roster.length >= maxPlayers(room.rows, room.cols)) {
-      throw new Refused(E.roomFull, "자리가 가득 찼어요. 선생님께 판을 키워 달라고 하세요.");
+    if (roster.length >= maxPlayers(room.rows, room.cols, room.round_limit)) {
+      throw new Refused(E.roomFull, "자리가 가득 찼어요. 선생님께 더 큰 판으로 방을 새로 만들어 달라고 하세요.");
     }
 
     const h = roster.filter((p) => p.team === "H").length;
@@ -955,6 +1018,12 @@ export class RoomDO extends DurableObject<Env> {
       return { reply: { t: "moved", cell }, broadcast: this.patchMessage([], [me.id]) };
     }
 
+    // 2026-08-29 규칙 — 상대가 이미 먹은 땅은 문제를 풀어도 가져올 수 없다.
+    // 그 땅을 가져오는 길은 공격칸으로 얻는 빼앗기 한 번뿐이다.
+    if (target.owner) {
+      throw new Refused(E.tooFar, "상대 팀이 먹은 땅이에요. 임자 없는 칸만 고를 수 있어요.");
+    }
+
     const now = Date.now();
     const taken = this.sql.exec(
       `UPDATE cells SET locked_by = ?, locked_until = ?
@@ -978,6 +1047,48 @@ export class RoomDO extends DurableObject<Env> {
     };
   }
 
+  /** 상대 팀이 가진 칸 수. 공격권을 줄지 말지 여기서 가린다. */
+  private enemyCellCount(team: Team): number {
+    const enemy: Team = team === "H" ? "C" : "H";
+    const row = this.sql
+      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM cells WHERE owner = ?", enemy)
+      .one();
+    return row.n;
+  }
+
+  /** 이 학생이 지금 빼앗을 권리를 들고 있는가 */
+  private hasSteal(playerId: string): boolean {
+    return this.sql.exec("SELECT 1 FROM steals WHERE player_id = ?", playerId).toArray().length > 0;
+  }
+
+  /**
+   * 공격으로 얻은 권리를 써서 상대 땅 하나를 가져온다.
+   *
+   * 고를 수 있는 범위는 **판 전체**다. 둘레로 제한하면 근처에 상대 땅이 없을 때
+   * 애써 얻은 권리를 못 쓰고 버리게 된다.
+   * 권리는 턴이 넘어가도 남는다 — 문제를 푼 그 턴에 고르지 못했다고 사라지면 억울하다.
+   */
+  private doSteal(me: PlayerRow, cell: number): ActionResult {
+    const room = this.needRoom();
+    if (room.status !== "running") throw new Refused(E.notRunning, "지금은 고를 수 없어요.");
+    if (!this.hasSteal(me.id)) throw new Refused(E.noAttempt, "빼앗을 권리가 없어요.");
+
+    const enemy: Team = me.team === "H" ? "C" : "H";
+    const target = this.sql.exec<CellRow>("SELECT * FROM cells WHERE idx = ?", cell).toArray()[0];
+    if (!target) throw new Refused(E.tooFar, "없는 칸이에요.");
+    if (target.owner !== enemy) throw new Refused(E.tooFar, "상대 팀의 땅만 가져올 수 있어요.");
+
+    this.sql.exec("UPDATE cells SET owner = ?, owned_by = NULL WHERE idx = ?", me.team, cell);
+    this.sql.exec("DELETE FROM steals WHERE player_id = ?", me.id);
+    this.addEvent("steal", me.id, cell, { at: Date.now(), name: me.name, team: me.team, cell });
+    this.bump();
+
+    return {
+      reply: { t: "stolen", cell, serverNow: Date.now() },
+      broadcast: this.patchMessage([cell], []),
+    };
+  }
+
   private doAnswer(me: PlayerRow, cell: number, choice: number): ActionResult {
     const room = this.needRoom();
     this.requirePlayable(room, me);
@@ -995,7 +1106,8 @@ export class RoomDO extends DurableObject<Env> {
     const correct = choice === quiz.ans;
     const changedCells: number[] = [cell];
     let bonus = 0;
-    let stolen: number | null = null;
+    const stolen: number | null = null; // 즉시 빼앗기는 없어졌다. 자리는 화면 호환을 위해 남긴다
+    let stealGranted = false;
 
     if (correct) {
       this.sql.exec("UPDATE cells SET owner = ?, owned_by = ? WHERE idx = ?", me.team, me.id, cell);
@@ -1015,10 +1127,11 @@ export class RoomDO extends DurableObject<Env> {
       if (target.type === "A" && !target.bonus_taken) {
         // 첫 점령 때만 공격 효과 발동. 이후 재점령은 일반 땅처럼 취급한다.
         this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
-        stolen = pickStealTarget(this.cells().map((c) => c.owner), me.team);
-        if (stolen !== null) {
-          this.sql.exec("UPDATE cells SET owner = ?, owned_by = NULL WHERE idx = ?", me.team, stolen);
-          changedCells.push(stolen);
+        // 예전에는 서버가 아무 칸이나 골라 즉시 빼앗았다. 이제는 학생이 판을 보고 직접 고른다.
+        // 빼앗을 상대 땅이 하나도 없으면 권리를 주지 않는다 — 고를 게 없는 손가락은 답답하기만 하다.
+        if (this.enemyCellCount(me.team) > 0) {
+          this.sql.exec("INSERT OR REPLACE INTO steals (player_id, granted_at) VALUES (?, ?)", me.id, Date.now());
+          stealGranted = true;
         }
       }
     }
@@ -1048,6 +1161,8 @@ export class RoomDO extends DurableObject<Env> {
       bonusSkipped: correct && target.type === "T" && bonus === 0,
       cellType: target.type,
       stolen,
+      // 참이면 화면이 "어디를 가져올까?" 손가락 고르기로 넘어간다
+      stealGranted,
       myPos: correct ? cell : me.pos,
       // 화면이 이 값을 받아야 칸이 다시 켜지지 않는다. patch 에는 "내" 정보가 없다.
       playedThisTurn: true,
@@ -1215,7 +1330,7 @@ export class RoomDO extends DurableObject<Env> {
       return out;
     }
 
-    if (msg.t !== "pick" && msg.t !== "answer" && msg.t !== "cancel") {
+    if (msg.t !== "pick" && msg.t !== "answer" && msg.t !== "cancel" && msg.t !== "steal") {
       throw new Refused(E.conflict, "모르는 요청입니다.");
     }
     if (!actor.playerId) throw new Refused(E.needHello, "먼저 입장해 주세요.");
@@ -1231,7 +1346,9 @@ export class RoomDO extends DurableObject<Env> {
         ? this.doPick(me, Number(msg.cell))
         : msg.t === "answer"
           ? this.doAnswer(me, Number(msg.cell), Number(msg.choice))
-          : this.doCancel(me);
+          : msg.t === "steal"
+            ? this.doSteal(me, Number(msg.cell))
+            : this.doCancel(me);
 
     // 상태 변경과 응답 기록이 같은 덩어리 안에 있어야 한다. sql.exec 가 동기라 자연히 지켜진다.
     this.rememberStudent(me.id, msg.actionId, out.reply);

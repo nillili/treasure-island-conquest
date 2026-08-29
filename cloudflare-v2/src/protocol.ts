@@ -15,6 +15,8 @@ export type ClientMessage =
   | { t: "hello"; role: "student" | "teacher"; playerId?: string; name?: string }
   | { t: "pick"; cell: number; actionId: string }
   | { t: "answer"; cell: number; choice: number; actionId: string }
+  /** 공격칸으로 얻은 권리를 써서 상대 땅 하나를 가져온다. 고르는 범위는 판 전체다. */
+  | { t: "steal"; cell: number; actionId: string }
   | { t: "cancel"; actionId: string }
   | { t: "cmd"; cmd: string; actionId: string; [key: string]: unknown }
   | { t: "peek"; cell: number }

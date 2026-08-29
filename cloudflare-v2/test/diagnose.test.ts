@@ -103,7 +103,8 @@ describe("캐시 버스팅", () => {
     expect(appBuild, "app.js 에서 APP_BUILD 를 찾지 못했다").toBeTruthy();
     expect(appBuild).toBe(BUILD);
 
-    const stamps = [...indexHtml.matchAll(/\?v=([0-9-]+)/g)].map((m) => m[1]);
+    // 판번호에는 같은 날 두 번 올릴 때를 위해 글자가 붙는다(2026-08-29b).
+    const stamps = [...indexHtml.matchAll(/\?v=([0-9a-z-]+)/g)].map((m) => m[1]);
     expect(stamps.length, "index.html 에 ?v= 가 하나도 없다").toBeGreaterThan(0);
     for (const stamp of stamps) expect(stamp).toBe(BUILD);
   });

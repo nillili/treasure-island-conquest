@@ -298,3 +298,77 @@ describe("기록 보관 기간", () => {
     expect(results).toHaveLength(1);
   });
 });
+
+/**
+ * 비밀번호 재설정 — 관제에서 유일하게 남의 것을 바꾸는 길이다.
+ * 그래서 "누가 부를 수 있나" 를 가장 촘촘히 지킨다.
+ */
+describe("비밀번호 재설정", () => {
+  const reset = (id: string, cookie?: string, body: Record<string, unknown> = {}) =>
+    SELF.fetch(`${BASE}/api/admin/teachers/${id}/password`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
+      body: JSON.stringify(body),
+    });
+
+  const login = (id: string, password: string) =>
+    SELF.fetch(`${BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, password }),
+    });
+
+  it("슈퍼가 아니면 있는 줄도 모른다 (403 이 아니라 404)", async () => {
+    const res = await reset("parkssam", plainCookie);
+    expect(res.status).toBe(404);
+  });
+
+  it("로그인도 안 했으면 401", async () => {
+    const res = await reset("parkssam");
+    expect(res.status).toBe(401);
+  });
+
+  it("GET 으로는 부를 수 없다", async () => {
+    const res = await get("/api/admin/teachers/parkssam/password", bossCookie);
+    expect(res.status).toBe(405);
+  });
+
+  it("임시 비밀번호를 지어 주고, 그것으로 실제 로그인이 된다", async () => {
+    const res = await reset("parkssam", bossCookie);
+    expect(res.status).toBe(200);
+    const out = (await res.json()) as { password: string; signedOut: boolean };
+    expect(out.password.length).toBeGreaterThanOrEqual(8);
+    expect(out.signedOut).toBe(true);
+
+    expect((await login("parkssam", out.password)).status).toBe(200);
+    expect((await login("parkssam", "pw1234")).status).toBe(401); // 옛 비밀번호는 죽는다
+  });
+
+  it("원하는 비밀번호를 직접 정해 줄 수도 있다", async () => {
+    const res = await reset("parkssam", bossCookie, { password: "새비밀번호99" });
+    expect(res.status).toBe(200);
+    expect((await login("parkssam", "새비밀번호99")).status).toBe(200);
+  });
+
+  it("너무 짧은 비밀번호는 거절한다", async () => {
+    const res = await reset("parkssam", bossCookie, { password: "12" });
+    expect(res.status).toBe(400);
+    expect((await login("parkssam", "pw1234")).status).toBe(200); // 안 바뀌었다
+  });
+
+  it("없는 선생님이면 404", async () => {
+    const res = await reset("nobodyhere", bossCookie);
+    expect(res.status).toBe(404);
+  });
+
+  it("바꾸면 그 선생님의 열린 세션이 끊긴다", async () => {
+    const before = await get("/api/quizsets", plainCookie);
+    expect(before.status).toBe(200); // 아직 살아 있다
+
+    await reset("parkssam", bossCookie);
+
+    const after = await get("/api/quizsets", plainCookie);
+    expect(after.status).toBe(401); // 옛 쿠키로는 못 들어온다
+  });
+});
+

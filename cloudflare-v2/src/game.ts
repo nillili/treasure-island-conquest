@@ -172,11 +172,34 @@ export function sizeHint(rows: number, cols: number, quizCount: number) {
 }
 
 /**
- * 방 정원. 10×10 → 41명 · 12×12 → 60명 · 15×15 → 93명.
- * 이보다 빽빽하면 서로 겹치지 않는 자리를 찾지 못하거나, 찾아도 둘레가 전부 아군이 된다.
+ * 한 판을 끝까지 하는 데 필요한 칸 수를 어림하는 정답률.
+ * 실측(2026-08-25 22명 82.7%, 08-29 9명 85%)에 맞춘 값이다.
  */
-export function maxPlayers(rows: number, cols: number): number {
-  return Math.floor((rows * cols) / 2.4);
+const SOLVE_RATE = 0.85;
+
+/**
+ * 방 정원.
+ *
+ * 예전에는 배치 밀도(칸/2.4)만 봤다. 상대 땅을 뺏을 수 있어서 칸이 재활용됐기 때문이다.
+ * 2026-08-29 규칙 변경으로 **임자 없는 칸만 먹을 수 있게 되자 칸이 재활용되지 않는다.**
+ * 그래서 이제는 게임 길이가 상한을 정한다 — 한 사람이 초기 배치 한 칸에 라운드마다 한 칸씩
+ * 더 먹으므로, 그만큼의 빈 칸이 처음부터 있어야 판이 중간에 마르지 않는다.
+ *
+ * 12×12 · 10라운드 → 15명 · 15×15 · 10라운드 → 23명 (예전에는 각각 60명 · 93명이었다)
+ */
+export function maxPlayers(rows: number, cols: number, roundLimit = 10): number {
+  const cells = rows * cols;
+  const byPlacement = Math.floor(cells / 2.4); // 서로 겹치지 않게 세울 수 있는 한계
+  const byGameLength = Math.floor(cells / (1 + roundLimit * SOLVE_RATE));
+  return Math.max(1, Math.min(byPlacement, byGameLength));
+}
+
+/** 이 인원으로 한 판을 하려면 한 변이 최소 얼마여야 하는가. 안내 문구에 쓴다. */
+export function minSideFor(players: number, roundLimit = 10): number {
+  for (let side = MIN_SIDE; side <= MAX_SIDE; side++) {
+    if (maxPlayers(side, side, roundLimit) >= players) return side;
+  }
+  return MAX_SIDE;
 }
 
 // ── 배치 (Backend.gs:868-935) ──────────────────────────────────────────────
@@ -195,9 +218,15 @@ export interface PlacementView {
   players: PlacementPlayer[];
 }
 
-/** 이 자리에 서면 도전할 칸(아군 칸이 아닌 이웃)이 하나라도 있는가 */
-export function canChallengeFrom(view: PlacementView, pos: number, team: Team): boolean {
-  return neighbors8(pos, view.rows, view.cols).some((n) => view.owners[n] !== team);
+/**
+ * 이 자리에 서면 도전할 칸(임자 없는 이웃)이 하나라도 있는가.
+ *
+ * 2026-08-29 규칙 변경 — **상대가 이미 먹은 땅은 도전할 수 없다.** 그래서 "아군이 아닌 칸"
+ * 이 아니라 "임자 없는 칸" 만 센다. 상대 땅을 가져오는 길은 공격 아이템 하나뿐이다.
+ * team 을 더는 보지 않지만, 부르는 쪽 서명을 바꾸지 않으려고 자리는 남겨 둔다.
+ */
+export function canChallengeFrom(view: PlacementView, pos: number, _team: Team): boolean {
+  return neighbors8(pos, view.rows, view.cols).some((n) => view.owners[n] === null);
 }
 
 function occupiedMap(view: PlacementView, exceptId: string | null): Set<number> {
@@ -220,20 +249,52 @@ export function setOwner(view: PlacementView, idx: number, team: Team): boolean 
  * 시작 칸을 칠하지 않던 때는 교실 TV 에 보드가 온통 회색이라 교사가 "배치가 안 됐다"고 읽었다
  * (2026-08-05 시연 피드백).
  */
+/**
+ * 새 게임: 전원을 **최대한 서로 멀리** 떼어 놓고, 선 자리를 그 학생의 팀 색으로 칠한다.
+ *
+ * 예전에는 완전 무작위였다. 상대 땅을 뺏을 수 있던 때는 뭉쳐 서도 서로 풀어 나갈 여지가
+ * 있었지만, 임자 없는 칸만 먹을 수 있게 된 뒤로는 뭉치면 곧바로 서로의 앞길을 막는다.
+ * 그래서 이미 놓인 사람들에게서 가장 먼 빈 칸을 차례로 고른다(가장 먼 점 고르기).
+ *
+ * 후보를 전부 훑지 않고 무작위로 몇 개만 보는 이유는, 30명 × 225칸을 매번 완전 탐색하면
+ * 느려서가 아니라 **매 판 똑같은 그림이 나오기 때문이다.** 적당히 섞여야 놀이가 된다.
+ */
 export function assignRandomPositions(view: PlacementView): void {
   const n = view.owners.length;
   if (view.players.length > n) {
     throw new Error(`학생 수(${view.players.length}명)가 칸 수(${n}칸)보다 많습니다. 보드를 키워 주세요.`);
   }
-  const pool: number[] = [];
-  for (let i = 0; i < n; i++) pool.push(i);
-  shuffle(pool);
 
+  const free: number[] = [];
+  for (let i = 0; i < n; i++) free.push(i);
+  shuffle(free);
+
+  const taken: number[] = [];
   const order = shuffle([...view.players]);
-  order.forEach((p, k) => {
-    p.pos = pool[k]!;
-    setOwner(view, p.pos, p.team);
-  });
+  const SAMPLE = 40; // 후보 표본. 전수 탐색이 아니라 이만큼만 보고 그중 가장 먼 곳을 고른다
+
+  for (const p of order) {
+    let bestAt = 0;
+    if (taken.length) {
+      let bestScore = -1;
+      const look = Math.min(SAMPLE, free.length);
+      for (let k = 0; k < look; k++) {
+        const cell = free[k]!;
+        // 이미 놓인 사람 중 가장 가까운 사람과의 거리 — 이게 클수록 넓게 퍼진다
+        let nearest = Infinity;
+        for (const t of taken) {
+          const d = chebyshev(cell, t, view.cols);
+          if (d < nearest) nearest = d;
+          if (nearest <= 1) break; // 더 볼 것 없다
+        }
+        if (nearest > bestScore) { bestScore = nearest; bestAt = k; }
+      }
+    }
+    const pos = free.splice(bestAt, 1)[0]!;
+    p.pos = pos;
+    taken.push(pos);
+    setOwner(view, pos, p.team);
+  }
 }
 
 /**

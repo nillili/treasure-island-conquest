@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-08-29">
-<script src="/net.js?v=2026-08-29" defer></script>
-<script src="/app.js?v=2026-08-29" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-08-29d">
+<script src="/net.js?v=2026-08-29d" defer></script>
+<script src="/app.js?v=2026-08-29d" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -138,6 +138,43 @@
 </div>
 
 <!-- ⑥ 미리보기 / 방번호 알림 ------------------------------------------- -->
+<!--
+  학생이 문제를 푸는 자리. 예전에는 오른쪽 사이드바 구석에 있어서 아이들이 못 봤다.
+  문제 · 결과 · 아이템 연출 · 공격 안내가 모두 이 한 자리를 차례로 쓴다(2026-08-29).
+-->
+<div id="play-modal" class="dim hidden">
+  <div class="modal play">
+    <div id="play-quiz" class="hidden">
+      <h3 class="play-where">🎯 <span id="quiz-cell"></span></h3>
+      <h2 id="quiz-question"></h2>
+      <div class="options" id="quiz-options"></div>
+      <button class="button muted top-gap" id="quiz-cancel">그만두기</button>
+    </div>
+
+    <div id="play-result" class="result hidden">
+      <div class="big" id="result-big"></div>
+      <div id="result-message"></div>
+      <b id="result-gain"></b>
+    </div>
+
+    <!-- 보물·폭풍·공격을 만나면 글자 대신 이 그림이 그 자리에 뜬다 -->
+    <div id="play-fx" class="play-fx hidden">
+      <div id="play-fx-art"></div>
+      <b id="play-fx-say"></b>
+    </div>
+  </div>
+</div>
+
+<!--
+  공격권을 얻었을 때. 판을 가려서는 고를 수가 없으므로 모달이 아니라 띠로 띄운다.
+  커다란 손가락은 마우스를 따라다니고, 가리키는 상대 땅이 녹색으로 켜진다.
+-->
+<div id="steal-banner" class="steal-banner hidden">
+  <span class="steal-big">💥 땅을 빼앗을 수 있어요!</span>
+  <span class="steal-sub">가져올 <b>상대 팀 땅</b>을 손가락으로 골라 누르세요 · 나중에 골라도 됩니다</span>
+</div>
+<div id="steal-finger" class="steal-finger hidden">👇</div>
+
 <div id="info-modal" class="dim hidden">
   <div class="modal wide">
     <h2 id="info-title"></h2>
@@ -186,17 +223,6 @@
       </div>
       <div class="sidebar">
         <div class="card notice" id="student-message"></div>
-        <div class="card quiz hidden" id="quiz-card">
-          <h3>🎯 <span id="quiz-cell"></span></h3>
-          <h2 id="quiz-question"></h2>
-          <div class="options" id="quiz-options"></div>
-          <button class="button muted top-gap" id="quiz-cancel">그만두기</button>
-        </div>
-        <div class="card result hidden" id="result-card">
-          <div class="big" id="result-big"></div>
-          <div id="result-message"></div>
-          <b id="result-gain"></b>
-        </div>
         <div class="card">
           <h3>칸 종류</h3>
           <div class="legend">

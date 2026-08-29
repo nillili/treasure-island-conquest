@@ -18,7 +18,7 @@ interface StateMsg {
   quizTitle: string;
   board: { t: string; o: string | null }[];
   players: { id: string; name: string; team: "H" | "C"; pos: number | null }[];
-  scores: { H: { total: number }; C: { total: number } };
+  scores: { H: { total: number; bonus: number }; C: { total: number; bonus: number } };
   cellLocks: Record<string, string>;
   myPlayer: { id: string; team: "H" | "C"; pos: number; playedThisTurn: boolean } | null;
   maxPlayers: number;
@@ -101,21 +101,31 @@ async function startGame(): Promise<StateMsg> {
   return sa.turnTeam === sa.myPlayer!.team ? sa : await myState(b.myPlayer!.id);
 }
 
-/** 지금 차례인 학생이 도전할 수 있는 칸 하나를 고른다. */
-function pickableCell(state: StateMsg): number {
-  const me = state.myPlayer!;
-  const { rows, cols } = state;
-  const r = Math.floor(me.pos / cols);
-  const c = me.pos % cols;
+/** 내 말 둘레 8칸의 번호. */
+function neighborsOf(pos: number, rows: number, cols: number): number[] {
+  const r = Math.floor(pos / cols);
+  const c = pos % cols;
+  const out: number[] = [];
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (!dr && !dc) continue;
       const nr = r + dr;
       const nc = c + dc;
       if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-      const idx = nr * cols + nc;
-      if (state.board[idx]!.o !== me.team && !state.cellLocks[String(idx)]) return idx;
+      out.push(nr * cols + nc);
     }
+  }
+  return out;
+}
+
+/**
+ * 지금 도전할 수 있는 칸 하나.
+ * 2026-08-29 규칙 변경 후로는 **임자 없는 칸** 만 해당한다(상대 땅은 못 먹는다).
+ */
+function pickableCell(state: StateMsg): number {
+  const me = state.myPlayer!;
+  for (const idx of neighborsOf(me.pos, state.rows, state.cols)) {
+    if (state.board[idx]!.o === null && !state.cellLocks[String(idx)]) return idx;
   }
   throw new Error("도전할 칸이 없다");
 }
@@ -132,7 +142,7 @@ describe("입장", () => {
     expect(state.quizTitle).toBe("국어1");
     expect(state.myPlayer!.team).toMatch(/^[HC]$/);
     expect(state.players).toHaveLength(1);
-    expect(state.maxPlayers).toBe(60); // 12×12
+    expect(state.maxPlayers).toBe(15); // 12×12 · 10라운드 (예전 규칙에서는 60명이었다)
   });
 
   it("팀이 한쪽으로 몰리지 않는다", async () => {
@@ -288,7 +298,7 @@ describe("게임 결과", () => {
     const out = await teacherCmd("end");
     const r = out.reply as {
       t: string; winner: string; rounds: number; quizTitle: string;
-      scores: { H: { total: number }; C: { total: number } };
+      scores: { H: { total: number; bonus: number }; C: { total: number; bonus: number } };
       players: { name: string; team: string; solved: number; correct: number }[];
     };
     expect(r.t).toBe("gameover");
@@ -530,11 +540,67 @@ describe("턴 타이머와 방 정리 (알람 하나로 둘 다)", () => {
   });
 });
 
+describe("상대 땅은 먹을 수 없다 (2026-08-29 규칙)", () => {
+  it("상대가 먹은 칸은 고를 수 없다", async () => {
+    const me = await startGame();
+    const enemy = me.myPlayer!.team === "H" ? "C" : "H";
+    // 내 둘레의 빈 칸 하나를 상대 땅으로 만들어 둔다
+    const near = pickableCell(me);
+    await runInDurableObject(env.ROOM.getByName(roomCode), (_i, state) => {
+      state.storage.sql.exec("UPDATE cells SET owner = ?, owned_by = NULL WHERE idx = ?", enemy, near);
+    });
+
+    const out = await rpc({ t: "pick", cell: near, actionId: "p", playerId: me.myPlayer!.id });
+    expect(out.code).toBe("too-far");
+    expect(out.msg).toContain("상대 팀이 먹은 땅");
+  });
+
+  it("임자 없는 칸은 그대로 먹을 수 있다", async () => {
+    const me = await startGame();
+    const out = await rpc({ t: "pick", cell: pickableCell(me), actionId: "p", playerId: me.myPlayer!.id });
+    expect((out.reply as { t: string }).t).toBe("quiz");
+  });
+});
+
+describe("홀수 보정 (2026-08-29)", () => {
+  it("인원이 맞으면 보정이 없다", async () => {
+    await startGame(); // 민수·영희 두 명이라 1:1
+    const t = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+    expect(t.scores.H.bonus).toBe(0);
+    expect(t.scores.C.bonus).toBe(0);
+  });
+
+  it("한 명 모자란 팀은 양 팀 전체 정답률만큼 받는다", async () => {
+    // 세 명이면 2:1 이 된다. 적은 쪽이 가상의 한 명분을 받는다.
+    const a = await join("민수");
+    await join("영희");
+    await join("철수");
+    await teacherCmd("newgame");
+    await teacherCmd("next");
+
+    // 몇 문제를 풀어 전체 정답률을 만든다
+    let me = await myState(a.myPlayer!.id);
+    if (me.turnTeam !== me.myPlayer!.team) me = await myState(a.myPlayer!.id);
+    const cell = pickableCell(me);
+    await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
+    await rpc({ t: "answer", cell, choice: 0, actionId: "an", playerId: me.myPlayer!.id });
+
+    const t = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+    const roster = t.players;
+    const h = roster.filter((p) => p.team === "H").length;
+    const short = h < roster.length - h ? "H" : "C";
+    // 소수점은 무조건 버리므로 초반에는 0 일 수 있다. 음수만 아니면 된다.
+    expect(t.scores[short].bonus).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(t.scores[short].bonus)).toBe(true);
+  });
+});
+
 describe("정원", () => {
   it("판이 꽉 차면 더 못 들어온다", async () => {
-    roomCode = await makeRoom(teacherCookie, { rows: 10, cols: 10 }); // 정원 41
-    for (let i = 0; i < 41; i++) await join(`학생${i}`);
-    const out = await rpc({ t: "hello", role: "student", name: "마흔둘" });
+    // 10×10 · 10라운드 → 정원 10명. 상대 땅을 못 먹게 된 뒤로 정원이 크게 줄었다.
+    roomCode = await makeRoom(teacherCookie, { rows: 10, cols: 10 });
+    for (let i = 0; i < 10; i++) await join(`학생${i}`);
+    const out = await rpc({ t: "hello", role: "student", name: "열한번째" });
     expect(out.code).toBe("room-full");
   });
 });
@@ -618,6 +684,29 @@ describe("턴 요약 (3D 무대)", () => {
     return cell;
   }
 
+  /** solve 와 같지만 채점 응답을 돌려준다 — stealGranted 같은 값을 봐야 할 때 쓴다. */
+  async function solveFor(state: StateMsg, type: "N" | "T" | "S" | "A") {
+    const id = state.myPlayer!.id;
+    const cell = pickableCell(state);
+    await inRoom("UPDATE cells SET type = ? WHERE idx = ?", type, cell);
+    await rpc({ t: "pick", cell, actionId: crypto.randomUUID(), playerId: id });
+    const out = await rpc({
+      t: "answer",
+      cell,
+      choice: await answerOf(cell),
+      actionId: crypto.randomUUID(),
+      playerId: id,
+    });
+    return out.reply;
+  }
+
+  /** 상대 팀이 가진 칸 하나. 공격으로 가져갈 대상을 고를 때 쓴다. */
+  function enemyCellOf(state: StateMsg, enemy: "H" | "C"): number {
+    const at = state.board.findIndex((c) => c.o === enemy);
+    if (at < 0) throw new Error("상대 땅이 없다");
+    return at;
+  }
+
   const teacherState = async () => (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
 
   it("시작하자마자는 양쪽 다 비어 있다", async () => {
@@ -654,15 +743,42 @@ describe("턴 요약 (3D 무대)", () => {
     expect(fx.names["treasure-bonus"]).toBeUndefined();
   });
 
-  it("💥 상대 땅이 있으면 '빼앗았다'", async () => {
+  it("💥 공격칸을 먹으면 그 자리에서는 '점령', 실제로 가져가야 '빼앗았다'", async () => {
+    // 2026-08-29 규칙 — 공격칸은 즉시 빼앗지 않고 "고를 권리" 만 준다.
+    // 고르는 것은 다음 턴으로 넘어갈 수도 있으므로 연출도 두 순간을 나눠 말해야 한다.
     const ids = await bothPlayers();
     const me = await whoseTurn(ids);
-    await solve(me, "A");
-    await timeoutTurn();
+    const res = await solveFor(me, "A");
+    expect((res as { stealGranted?: boolean }).stealGranted).toBe(true);
 
+    await timeoutTurn();
+    const claimed = (await teacherState()).turnFx[me.myPlayer!.team]!;
+    expect(claimed.names["attack-claim"]).toHaveLength(1);
+    expect(claimed.names["attack-steal"]).toBeUndefined(); // 아직 안 가져갔다
+  });
+
+  it("💥 권리를 써서 상대 땅을 고르면 그때 '빼앗았다'", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    await solveFor(me, "A");
+
+    const enemy = me.myPlayer!.team === "H" ? "C" : "H";
+    const mine = enemyCellOf(await myState(me.myPlayer!.id), enemy);
+    const out = await rpc({ t: "steal", cell: mine, actionId: "s", playerId: me.myPlayer!.id });
+    expect((out.reply as { t: string }).t).toBe("stolen");
+
+    await timeoutTurn();
     const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
     expect(fx.names["attack-steal"]).toHaveLength(1);
-    expect(fx.names["attack-claim"]).toBeUndefined();
+  });
+
+  it("💥 권리 없이 남의 땅을 가져갈 수는 없다", async () => {
+    const ids = await bothPlayers();
+    const me = await whoseTurn(ids);
+    const enemy = me.myPlayer!.team === "H" ? "C" : "H";
+    const target = enemyCellOf(me, enemy);
+    const out = await rpc({ t: "steal", cell: target, actionId: "s", playerId: me.myPlayer!.id });
+    expect(out.code).toBe("no-attempt");
   });
 
   it("💥 빼앗을 상대 땅이 없으면 '빼앗았다'가 아니다", async () => {
@@ -672,7 +788,7 @@ describe("턴 요약 (3D 무대)", () => {
     const cell = pickableCell(me);
     await inRoom("UPDATE cells SET type = 'A' WHERE idx = ?", cell);
     await rpc({ t: "pick", cell, actionId: "p", playerId: me.myPlayer!.id });
-    // 채점 직전에 상대 땅을 모두 없앤다 — 공격은 성공하지만 가져올 칸이 없다.
+    // 채점 직전에 상대 땅을 모두 없앤다 — 공격칸은 먹지만 고를 것이 없어 권리를 안 준다.
     await inRoom("UPDATE cells SET owner = NULL, owned_by = NULL WHERE owner = ?", enemy);
     await rpc({ t: "answer", cell, choice: await answerOf(cell), actionId: "a", playerId: me.myPlayer!.id });
     await timeoutTurn();
@@ -693,7 +809,7 @@ describe("턴 요약 (3D 무대)", () => {
     await timeoutTurn();
 
     const fx = (await teacherState()).turnFx[me.myPlayer!.team]!;
-    // 효과가 소진됐으므로 attack-steal 없이 attack-claim 만
+    // 효과가 소진됐으므로 권리도 안 준다 — attack-claim 만 남는다
     expect(fx.names["attack-claim"]).toHaveLength(1);
     expect(fx.names["attack-steal"]).toBeUndefined();
   });

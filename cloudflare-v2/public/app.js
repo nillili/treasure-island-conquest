@@ -21,13 +21,14 @@ const APP = {
   currentCell: null,
   submitting: false,
   syncing: false,
+  stealing: false, // 공격권을 얻어 "어디를 가져올까" 고르는 중
   clockOffset: 0,
   sets: [],
   teacher: null,
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-08-29";
+const APP_BUILD = "2026-08-29d";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -156,8 +157,17 @@ function renderBoard(hostId, admin) {
   if (!admin && me && me.pos !== null && canPlay() && APP.mode !== "solving") {
     for (const i of neighbors(me.pos, st.rows, st.cols)) {
       if (st.cellLocks[i]) continue;
-      candidates[i] = st.board[i].o === me.team ? "move" : st.board[i].o ? "enemy" : "can";
+      // 2026-08-29 규칙 — 상대가 먹은 땅은 도전 대상이 아니다. 아군 칸은 이동만 된다.
+      if (st.board[i].o === me.team) candidates[i] = "move";
+      else if (!st.board[i].o) candidates[i] = "can";
     }
+  }
+
+  // 공격으로 가져올 수 있는 칸 — 판 전체의 상대 땅
+  const stealable = {};
+  if (!admin && me && APP.stealing) {
+    const enemy = me.team === "H" ? "C" : "H";
+    st.board.forEach((c, i) => { if (c.o === enemy) stealable[i] = true; });
   }
 
   let html = '<div class="axis"></div>';
@@ -171,6 +181,7 @@ function renderBoard(hostId, admin) {
       if (cell.o) cls.push(cell.o);
       if (st.cellLocks[i]) cls.push(admin ? "attacking" : "locked");
       if (candidates[i]) cls.push("can", candidates[i]);
+      if (stealable[i]) cls.push("steal-ok");
       if (!admin && me && me.pos === i) cls.push("me");
       const icon = cell.o ? ICON[cell.t] || "" : "?";
       html += `<button class="${cls.join(" ")}" data-cell="${i}"><span class="coord">${cellLabel(i, st.cols)}</span><span>${icon}</span>`;
@@ -443,8 +454,13 @@ function onMessage(msg) {
       if (msg.myPlayer) {
         APP.playerId = msg.myPlayer.id;
         localStorage.setItem("treasure-player-id", msg.myPlayer.id);
+        // 권리는 서버가 들고 있다. 새로고침하거나 끊겼다 붙어도 이어서 고를 수 있어야 한다.
+        if (msg.myPlayer.hasSteal && !APP.stealing) startStealing();
+        else if (!msg.myPlayer.hasSteal && APP.stealing) stopStealing();
       }
-      if (APP.mode !== "solving") APP.mode = "waiting";
+      // "result" 도 건드리지 않는다. 남이 답한 patch 하나가 내 결과창을 밀어내면,
+      // 닫기 타이머가 "내 차례가 아니네" 하고 되돌아가 창이 영영 남는다(2026-08-29).
+      if (APP.mode !== "solving" && APP.mode !== "result") APP.mode = "waiting";
       render();
       return;
     }
@@ -477,7 +493,9 @@ function onMessage(msg) {
         APP.state.myPlayer.playedThisTurn = false;
         APP.state.iAmSkipping = false;
       }
-      if (APP.mode !== "solving") APP.mode = "waiting";
+      // "result" 도 건드리지 않는다. 남이 답한 patch 하나가 내 결과창을 밀어내면,
+      // 닫기 타이머가 "내 차례가 아니네" 하고 되돌아가 창이 영영 남는다(2026-08-29).
+      if (APP.mode !== "solving" && APP.mode !== "result") APP.mode = "waiting";
       // 폭풍으로 쉬는지는 서버만 안다. 턴이 바뀌면 내 상태를 한 번 확인한다.
       if (APP.role === "student") netSend({ t: "sync" });
       render();
@@ -488,6 +506,11 @@ function onMessage(msg) {
       return;
     case "result":
       showResult(msg);
+      return;
+    case "stolen":
+      // 다 가져왔다. 띠와 손가락을 걷고 판을 다시 그린다.
+      stopStealing();
+      toast("💥 땅을 빼앗았어요!");
       return;
     case "closed": {
       // 선생님이 방을 닫았다. 학생은 입장 화면으로, 선생님은 설정으로 돌아간다.
@@ -549,20 +572,49 @@ function onStatus(kind, text) {
 }
 
 // ── 학생: 칸 고르기 · 답 ────────────────────────────────────────────────────
+/**
+ * 화면 한가운데 놀이 창. 문제·결과·아이템이 이 한 자리를 차례로 쓴다(2026-08-29).
+ * 무엇을 보일지 하나만 정하면 나머지는 알아서 감춘다 — 두 개가 겹쳐 뜨는 사고를 없앤다.
+ */
+function showPlay(which) {
+  const modal = $("play-modal");
+  if (!which) {
+    modal.classList.add("hidden");
+    $("student-message").classList.remove("hidden");
+    return;
+  }
+  for (const name of ["quiz", "result", "fx"]) {
+    $(`play-${name}`).classList.toggle("hidden", name !== which);
+  }
+  $("student-message").classList.add("hidden");
+  modal.classList.remove("hidden");
+}
+
 function hideQuiz() {
-  $("quiz-card").classList.add("hidden");
-  $("student-message").classList.remove("hidden");
+  showPlay(null);
 }
 
 function renderQuiz(msg) {
+  playGen++; // 새 문제가 창을 넘겨받는다. 앞 결과의 닫기 타이머는 무효가 된다.
   $("quiz-cell").textContent = cellLabel(msg.cell, APP.state.cols);
   $("quiz-question").textContent = msg.q;
   $("quiz-options").innerHTML = msg.options
     .map((x, i) => `<button class="option" data-choice="${i}"><b>${i + 1}</b>${esc(x)}</button>`)
     .join("");
-  $("student-message").classList.add("hidden");
-  $("result-card").classList.add("hidden");
-  $("quiz-card").classList.remove("hidden");
+  showPlay("quiz");
+}
+
+/** 보물·폭풍·공격을 만났을 때. 글자 대신 그 자리에 3D 그림을 띄운다. */
+const FX_SAY = {
+  treasure: "📦 보물을 찾았다!",
+  storm: "⛈️ 폭풍! 다음 턴은 쉰다",
+  attack: "💥 공격! 땅을 빼앗을 수 있다",
+};
+function showItemFx(kind) {
+  const team = APP.state?.myPlayer?.team ?? "H";
+  $("play-fx-art").innerHTML = fxImg(kind, team);
+  $("play-fx-say").textContent = FX_SAY[kind] ?? "";
+  showPlay("fx");
 }
 
 async function selectCell(cell) {
@@ -610,6 +662,15 @@ async function submitChoice(choice) {
   }
 }
 
+/**
+ * 놀이 창 세대 번호. 창을 새로 띄울 때마다 오른다.
+ *
+ * 닫기 타이머가 APP.mode 를 보고 판단하던 때는, 그 사이 남이 답한 patch 가 mode 를
+ * 바꿔 놓으면 타이머가 그냥 되돌아가 **창이 영영 남았다**(2026-08-29 "정답!" 얼음).
+ * 이제는 "내가 띄운 그 창이 아직 떠 있는가" 만 보고 닫는다.
+ */
+let playGen = 0;
+
 function showResult(msg) {
   replyArrived();
   APP.submitting = false;
@@ -620,22 +681,104 @@ function showResult(msg) {
     APP.state.myPlayer.playedThisTurn = true;
     if (msg.skipNextTurn) APP.state.iAmSkipping = true;
   }
-  hideQuiz();
-  $("student-message").classList.add("hidden");
-  $("result-card").classList.remove("hidden");
   $("result-big").className = `big ${msg.correct ? "ok" : "no"}`;
   $("result-big").textContent = msg.correct ? "정답!" : "아쉬워요";
   $("result-message").textContent = msg.correct && msg.bonusSkipped
     ? "정답입니다. 이 칸의 보너스는 이미 받았어요."
     : `정답은 ${msg.answerText} 입니다.`;
   $("result-gain").textContent = msg.correct ? `+${msg.gain}점` : "점령 실패";
+  showPlay("result");
+
+  // 맞혀서 아이템을 만났으면, 결과를 잠깐 보여 준 뒤 같은 자리에 3D 그림으로 바꿔 준다.
+  const item = msg.correct ? { T: "treasure", S: "storm", A: "attack" }[msg.cellType] : null;
+
+  const mine = ++playGen;
   setTimeout(() => {
-    if (APP.mode !== "result") return;
-    APP.mode = "waiting";
-    $("result-card").classList.add("hidden");
-    $("student-message").classList.remove("hidden");
-    render();
-  }, 3000);
+    if (playGen !== mine) return; // 그 사이 새 창이 떴다
+    if (!item) return closePlay();
+    showItemFx(item);
+    // 그림은 **다음 턴 얼마 전까지** 머문다. 잠깐 떴다 사라지면 아이들이 못 본다.
+    setTimeout(() => {
+      if (playGen !== mine) return;
+      closePlay();
+      // 공격이면 그림이 사라진 자리에서 곧바로 "어디를 가져올까" 고르기로 넘어간다.
+      if (msg.stealGranted) startStealing();
+    }, fxLinger(item));
+  }, item ? 1200 : 3000);
+}
+
+/**
+ * 아이템 그림을 얼마나 띄워 둘까.
+ *
+ * 보통은 다음 턴 5초 전까지 둔다. 다만 **공격은 10초 전에 걷는다** — 그림이 사라진 뒤
+ * 상대 땅을 골라야 하는데, 5초는 판을 훑어보기에 짧다(2026-08-29 수업 확인).
+ * 턴이 얼마 안 남았으면 최소한은 보여 주고, 아주 길어도 너무 오래 판을 가리지 않는다.
+ */
+const FX_CLEAR_BEFORE = { attack: 10000 };
+function fxLinger(kind) {
+  const left = (APP.state?.turnEndsAt ?? 0) - now();
+  const before = FX_CLEAR_BEFORE[kind] ?? 5000;
+  return Math.max(2000, Math.min(left - before, 12000));
+}
+
+/**
+ * 공격권을 얻었다 — 판 전체에서 가져올 상대 땅 하나를 고른다.
+ *
+ * 모달로 덮으면 판이 안 보여 고를 수가 없다. 그래서 위쪽 띠로 알리고,
+ * 커다란 손가락이 마우스를 따라다니며 가리키는 상대 땅을 켠다.
+ * 고르기 전에 턴이 넘어가도 권리는 서버에 남아 있으므로 서두를 필요가 없다.
+ */
+function startStealing() {
+  if (APP.stealing) return; // 이미 고르는 중이면 그대로 둔다
+  APP.stealing = true;
+  $("steal-banner").classList.remove("hidden");
+  $("steal-finger").classList.remove("hidden");
+  document.body.classList.add("stealing");
+  render();
+}
+
+function stopStealing() {
+  APP.stealing = false;
+  $("steal-banner").classList.add("hidden");
+  $("steal-finger").classList.add("hidden");
+  document.body.classList.remove("stealing");
+  render();
+}
+
+// 손가락은 마우스를 따라다닌다. 고르는 중이 아닐 때는 아무 일도 하지 않는다.
+addEventListener("pointermove", (event) => {
+  if (!APP.stealing) return;
+  const finger = $("steal-finger");
+  finger.style.left = `${event.clientX}px`;
+  finger.style.top = `${event.clientY}px`;
+
+  // 지금 가리키는 상대 땅만 켠다
+  const over = event.target.closest?.("[data-cell]");
+  for (const el of document.querySelectorAll(".cell.steal-hot")) el.classList.remove("steal-hot");
+  if (over && over.classList.contains("steal-ok")) over.classList.add("steal-hot");
+});
+
+/** 손가락으로 고른 칸을 실제로 가져온다. */
+async function takeCell(cell) {
+  const st = APP.state;
+  const enemy = st?.myPlayer?.team === "H" ? "C" : "H";
+  if (st?.board?.[cell]?.o !== enemy) return toast("상대 팀의 땅만 가져올 수 있어요.");
+
+  stopStealing();
+  try {
+    await netSend({ t: "steal", cell, actionId: newActionId() });
+  } catch {
+    // 못 보냈으면 권리는 서버에 그대로 있다. 다시 고를 수 있게 되돌린다.
+    startStealing();
+    toast("보내지 못했어요. 다시 골라 보세요.");
+  }
+}
+
+/** 놀이 창을 닫고 판으로 돌아간다. */
+function closePlay() {
+  APP.mode = "waiting";
+  showPlay(null);
+  render();
 }
 
 // ── 입장 ────────────────────────────────────────────────────────────────────
@@ -746,7 +889,13 @@ document.addEventListener("click", async (event) => {
   const cell = t.closest("[data-cell]");
   if (cell) {
     const idx = Number(cell.dataset.cell);
-    if (APP.role === "student") return selectCell(idx);
+    if (APP.role === "student") {
+      // 고르기 중이라도 **상대 땅일 때만** 뺏기로 간다. 예전에는 모든 클릭을 뺏기로 보내는 바람에
+      // 빼앗기 전에는 아무것도 못 하고 갇혔다(2026-08-29 수업에서 "무한 기다림" 으로 나타났다).
+      const enemyTeam = APP.state?.myPlayer?.team === "H" ? "C" : "H";
+      if (APP.stealing && APP.state?.board?.[idx]?.o === enemyTeam) return takeCell(idx);
+      return selectCell(idx);
+    }
     if (APP.role === "teacher") return netSend({ t: "peek", cell: idx });
   }
 
@@ -799,6 +948,9 @@ document.addEventListener("click", async (event) => {
 
   if (t.closest("#super-open")) return openSuper();
   if (t.closest("#super-refresh")) return openSuper();
+  // 재설정 버튼은 선생님 줄 안에 있다. 줄보다 먼저 잡아야 줄이 접히지 않는다.
+  const resetBtn = t.closest("[data-reset]");
+  if (resetBtn) return resetTeacherPassword(resetBtn.dataset.reset);
   const teacherRow = t.closest("[data-teacher]");
   if (teacherRow) return toggleTeacher(teacherRow.dataset.teacher);
   const quizBtn = t.closest("[data-quiz]");
@@ -1173,7 +1325,44 @@ async function supDetail(id) {
     ${quizzes}
     <h3 style="margin-top:12px">🎮 지난 수업 (${d.games.length})</h3>
     ${supGames(d.games, false)}
+    <h3 style="margin-top:12px">🔑 비밀번호</h3>
+    <div class="sup-reset">
+      <span>잊어버렸다고 하면 새로 정해 줄 수 있습니다. 옛 비밀번호는 아무도 알 수 없습니다.</span>
+      <button class="button muted" data-reset="${esc(d.teacher.id)}">비밀번호 재설정</button>
+    </div>
   </div>`;
+}
+
+/**
+ * 남의 비밀번호를 새로 정해 준다. 관제에서 유일하게 남의 것을 바꾸는 자리라,
+ * 실수로 눌리지 않게 한 번 되묻고 결과를 크게 보여 준다.
+ */
+async function resetTeacherPassword(id) {
+  const 직접 = prompt(
+    `${id} 선생님의 비밀번호를 새로 정합니다.\n\n` +
+      "· 새 비밀번호를 적으면 그것으로 바뀝니다\n" +
+      "· 비워 두고 확인을 누르면 임시 비밀번호를 지어 드립니다\n" +
+      "· 그 선생님은 지금 열려 있는 화면에서 모두 로그아웃됩니다",
+    "",
+  );
+  if (직접 === null) return; // 취소
+
+  try {
+    const out = await api(`/api/admin/teachers/${encodeURIComponent(id)}/password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: 직접.trim() }),
+    });
+    showInfo(
+      "🔑 비밀번호를 새로 정했습니다",
+      `<p><b>${esc(id)}</b> 선생님의 새 비밀번호입니다. <b>이 창을 닫으면 다시 볼 수 없습니다.</b></p>
+       <div class="sup-newpw">${esc(out.password)}</div>
+       <div class="warning">그 선생님은 열려 있던 화면에서 모두 로그아웃되었습니다.
+         ${id === APP.teacher?.id ? "<b>본인 계정이므로 나가기 후 다시 로그인해야 합니다.</b>" : ""}</div>`,
+    );
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 async function previewOtherQuiz(id) {

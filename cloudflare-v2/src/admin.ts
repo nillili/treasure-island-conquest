@@ -4,13 +4,16 @@
  * 보통 선생님은 자기 것만 본다. 그 경계는 지금까지 teacher_id 로 지켜 왔고,
  * 여기서만 그 경계를 넘는다. 그래서 이 파일의 모든 길은 requireSuper 를 먼저 지난다.
  *
- * 보여 주기만 한다. 남의 퀴즈를 고치거나 지우는 길은 여기에 없다 —
+ * 거의 다 보여 주기만 한다. 남의 퀴즈를 고치거나 지우는 길은 여기에 없다 —
  * 관제는 "무슨 일이 있었나" 를 아는 자리이지 남의 수업을 손대는 자리가 아니다.
+ *
+ * 딱 하나 예외가 비밀번호 재설정이다. 잊어버린 선생님을 되살릴 길이 달리 없어서 뚫었다
+ * (2026-08-29). 그래서 쓰기는 이 한 곳뿐이고, 나머지는 GET 만 받는다.
  *
  * 학생 이름은 어디에도 나오지 않는다. game_records 에 애초에 담기지 않는다
  * (migrations/0003, 2026-08-09 결정).
  */
-import { requireSuper } from "./auth";
+import { requireSuper, setPassword, tempPassword } from "./auth";
 import { fail, json } from "./http";
 import type { GameIssue } from "./protocol";
 
@@ -255,9 +258,38 @@ async function quizPreview(env: Env, id: number): Promise<Response> {
   });
 }
 
+/**
+ * 비밀번호를 새로 정해 준다. 새 비밀번호를 주면 그것으로, 안 주면 임시 비밀번호를 지어 준다.
+ * 지어 준 비밀번호는 **이 응답에서 한 번만** 돌려준다 — 저장해 두지 않으므로 다시 볼 수 없다.
+ */
+async function resetPassword(request: Request, env: Env, teacherId: string): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { password?: unknown };
+  const given = typeof body.password === "string" ? body.password.trim() : "";
+  const password = given || tempPassword();
+
+  const problem = await setPassword(env, teacherId, password);
+  if (problem) return fail(problem, given ? 400 : 404);
+
+  return json({
+    ok: true,
+    teacherId,
+    password,
+    // 바꾸는 순간 그 선생님의 열린 세션이 모두 끊긴다. 화면이 이걸 알려 줘야 당황하지 않는다.
+    signedOut: true,
+  });
+}
+
 export async function handleAdmin(request: Request, env: Env, path: string): Promise<Response> {
   const me = await requireSuper(request, env);
   if (me instanceof Response) return me;
+
+  // 쓰기는 여기 하나뿐이다. 이 검사보다 먼저 GET 을 강제하면 재설정이 막힌다.
+  const reset = /^\/api\/admin\/teachers\/([A-Za-z0-9]{4,20})\/password$/.exec(path);
+  if (reset) {
+    if (request.method !== "POST") return fail("POST 로 보내 주세요.", 405);
+    return resetPassword(request, env, reset[1]!);
+  }
+
   if (request.method !== "GET") return fail("GET 으로 보내 주세요.", 405);
 
   if (path === "/api/admin/overview") return overview(env);

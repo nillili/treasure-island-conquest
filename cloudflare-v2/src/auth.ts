@@ -75,6 +75,38 @@ export async function requireTeacher(request: Request, env: Env): Promise<string
  * 로그인하지 않은 사람과 권한이 없는 선생님을 굳이 갈라서 알려 주지 않는다.
  * 관제 화면이 있다는 사실 자체가 보통 선생님에게 드러날 이유가 없다.
  */
+/**
+ * 슈퍼관리자가 남의 비밀번호를 새로 정해 준다.
+ *
+ * 옛 비밀번호는 묻지 않는다 — 단방향 해시라 서버도 알 수 없고, 잊어버린 사람을 돕는 것이
+ * 이 기능의 목적이기 때문이다. 그래서 **슈퍼관리자만** 부를 수 있어야 한다(admin.ts 가 지킨다).
+ *
+ * 바꾸고 나면 그 선생님의 열린 세션을 모두 끊는다. 비밀번호가 바뀌었는데 옛 쿠키로
+ * 계속 들어와지면 바꾼 의미가 없다. 본인 것을 바꿨다면 본인도 다시 로그인해야 한다.
+ */
+export async function setPassword(env: Env, teacherId: string, password: string): Promise<string | null> {
+  if (password.length < 4) return "비밀번호는 4자 이상으로 정해 주세요.";
+  const salt = crypto.randomUUID();
+  const hash = await hashPassword(password, salt);
+  const done = await env.DB.prepare("UPDATE teachers SET pw_salt = ?, pw_hash = ? WHERE id = ?")
+    .bind(salt, hash, teacherId)
+    .run();
+  if (!done.meta.changes) return "그런 선생님이 없습니다.";
+  await env.DB.prepare("DELETE FROM sessions WHERE teacher_id = ?").bind(teacherId).run();
+  return null;
+}
+
+/**
+ * 임시 비밀번호를 하나 짓는다. 선생님이 학생 앞에서 불러 줄 수 있어야 하므로
+ * 헷갈리는 글자(0·O·1·l·I)는 빼고 짧게 만든다.
+ */
+export function tempPassword(): string {
+  const abc = "abcdefghjkmnpqrstuvwxyz23456789";
+  const pick = new Uint8Array(8);
+  crypto.getRandomValues(pick);
+  return [...pick].map((n) => abc[n % abc.length]).join("");
+}
+
 export async function requireSuper(request: Request, env: Env): Promise<string | Response> {
   const teacherId = await teacherFromCookie(request, env);
   if (!teacherId) return fail("선생님 로그인이 필요합니다.", 401, "no-session");

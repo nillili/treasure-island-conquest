@@ -93,4 +93,12 @@ CREATE TABLE IF NOT EXISTS fx (
   detail TEXT    NOT NULL,
   at     INTEGER NOT NULL
 );
+
+-- 공격칸을 처음 점령해 "땅을 하나 빼앗을 권리" 를 얻은 학생. 쓰면 지운다.
+-- 예전에는 서버가 아무 칸이나 골라 즉시 빼앗았지만, 2026-08-29 부터는 학생이 직접 고른다.
+-- players 에 컬럼을 더하지 않은 이유는 위 fx 와 같다 — 돌고 있는 방에는 새 컬럼이 안 생긴다.
+CREATE TABLE IF NOT EXISTS steals (
+  player_id  TEXT PRIMARY KEY,
+  granted_at INTEGER NOT NULL
+);
 `;

@@ -10,6 +10,7 @@ import {
   chebyshev,
   columnLabel,
   maxPlayers,
+  minSideFor,
   neighbors8,
   nextTurn,
   pickStealTarget,
@@ -124,10 +125,24 @@ describe("판 크기", () => {
     expect(checkBoardSize(12.5, 12)).not.toBeNull();
   });
 
-  it("정원은 판 크기에서 계산한다", () => {
-    expect(maxPlayers(10, 10)).toBe(41);
-    expect(maxPlayers(12, 12)).toBe(60);
-    expect(maxPlayers(15, 15)).toBe(93);
+  it("정원은 판 크기와 라운드 수에서 계산한다", () => {
+    // 2026-08-29 규칙 변경 — 상대 땅을 못 먹으니 칸이 재활용되지 않는다. 그래서 정원을
+    // 정하는 것은 배치 밀도가 아니라 게임 길이다. 예전 값은 41·60·93 이었다.
+    expect(maxPlayers(10, 10, 10)).toBe(10);
+    expect(maxPlayers(12, 12, 10)).toBe(15);
+    expect(maxPlayers(15, 15, 10)).toBe(23);
+  });
+
+  it("라운드가 짧으면 더 많이 들어올 수 있다", () => {
+    // 한 사람이 먹는 칸이 줄어드니 같은 판에 더 많이 설 수 있다.
+    expect(maxPlayers(12, 12, 5)).toBeGreaterThan(maxPlayers(12, 12, 10));
+    // 다만 배치 밀도(칸/2.4)를 넘지는 못한다 — 서로 겹치지 않게 세울 자리가 있어야 한다.
+    expect(maxPlayers(12, 12, 1)).toBe(60);
+  });
+
+  it("인원에 맞는 최소 판 크기를 알려 준다", () => {
+    expect(minSideFor(10, 10)).toBe(10);
+    expect(minSideFor(22, 10)).toBe(15); // 오늘 수업 인원 — 12×12 로는 모자란다
   });
 });
 
