@@ -27,7 +27,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-08-13";
+const APP_BUILD = "2026-08-29";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -44,6 +44,51 @@ function toast(text) {
   clearTimeout(el.timer);
   el.timer = setTimeout(() => el.classList.remove("show"), 3000);
 }
+
+/**
+ * 서버 답을 기다리며 화면을 잠가 두는 시간의 한계.
+ *
+ * 2026-08-29 수업에서 학생 둘이 여기 갇혔다(민서 3라운드, 미소 7분).
+ * pick 을 보내고 mode 를 "solving" 으로 바꾼 뒤 문제가 영영 오지 않으면,
+ * 그 뒤의 모든 클릭이 selectCell 첫 줄에서 조용히 되돌아간다.
+ * 화면은 녹색 테두리로 "고르세요" 라고 말하는데 눌리지는 않는다.
+ * 서버에는 요청이 한 건도 오지 않으므로 선생님도 알아챌 방법이 없다.
+ */
+const REPLY_TIMEOUT_MS = 5000;
+
+let stuckTimer = 0;
+
+/** 보낸 것의 답이 제때 오는지 지켜본다. 안 오면 스스로 풀어 준다. */
+function watchReply(what) {
+  clearTimeout(stuckTimer);
+  stuckTimer = setTimeout(() => {
+    if (APP.mode !== "solving") return; // 제때 왔다
+    unstick(`${what} 응답이 늦어요. 다시 눌러 보세요.`);
+  }, REPLY_TIMEOUT_MS);
+}
+const replyArrived = () => clearTimeout(stuckTimer);
+
+/**
+ * 갇힘을 푼다 — 화면을 고를 수 있는 상태로 되돌리고 왜 그런지 말해 준다.
+ * 학생이 이유를 모른 채 같은 칸을 계속 누르는 일이 없어야 한다.
+ */
+function unstick(why) {
+  clearTimeout(stuckTimer);
+  APP.mode = "waiting";
+  APP.currentCell = null;
+  APP.submitting = false;
+  hideQuiz();
+  toast(why);
+  render();
+}
+
+// 조용한 죽음을 없앤다. 처리되지 않은 예외 하나가 화면을 굳혀 놓고도 아무 말이
+// 없으면, 학생은 눌러도 안 되는 화면 앞에서 이유를 알 수 없다.
+addEventListener("unhandledrejection", (event) => {
+  console.error("처리되지 않은 오류", event.reason);
+  if (APP.role === "student" && APP.mode === "solving") unstick("문제가 생겼어요. 다시 눌러 보세요.");
+});
+addEventListener("error", (event) => console.error("화면 오류", event.error || event.message));
 
 function showScreen(id) {
   for (const s of document.querySelectorAll(".screen")) s.classList.toggle("hidden", s.id !== id);
@@ -107,7 +152,7 @@ function renderBoard(hostId, admin) {
 
   const me = st.myPlayer;
   const candidates = {};
-  if (!admin && me && me.pos !== null && canPlay()) {
+  if (!admin && me && me.pos !== null && canPlay() && APP.mode !== "solving") {
     for (const i of neighbors(me.pos, st.rows, st.cols)) {
       if (st.cellLocks[i]) continue;
       candidates[i] = st.board[i].o === me.team ? "move" : st.board[i].o ? "enemy" : "can";
@@ -428,7 +473,7 @@ function onMessage(msg) {
       return;
     }
     case "quiz":
-      if (APP.mode === "solving" && APP.currentCell === msg.cell) renderQuiz(msg);
+      if (APP.mode === "solving" && APP.currentCell === msg.cell) { replyArrived(); renderQuiz(msg); }
       return;
     case "result":
       showResult(msg);
@@ -458,6 +503,7 @@ function onMessage(msg) {
 }
 
 function onError(msg) {
+  replyArrived();
   if (APP.mode === "solving") { APP.mode = "waiting"; hideQuiz(); }
   APP.submitting = false;
 
@@ -508,7 +554,7 @@ function renderQuiz(msg) {
   $("quiz-card").classList.remove("hidden");
 }
 
-function selectCell(cell) {
+async function selectCell(cell) {
   const why = blockReason();
   if (why || APP.mode === "solving") {
     const said = {
@@ -518,25 +564,43 @@ function selectCell(cell) {
       폭풍쉼: "⛈️ 이번 턴은 폭풍으로 쉽니다.",
       시작전: "아직 시작 전이에요. 선생님을 기다려 주세요.",
       게임종료: "게임이 끝났어요.",
+      관전: "이 방의 내 자리를 찾지 못했어요. 새로고침 뒤 이름을 다시 넣어 주세요.",
+      상태없음: "아직 판을 받지 못했어요. 잠시만요.",
     }[why];
-    if (said) toast(said);
+    // ⑤ 막히면 왜 막혔는지 말해 준다. 예전에는 표에 없는 사유(관전·상태없음)와
+    // solving 갇힘이 아무 말 없이 되돌아가, 학생이 이유도 모르고 계속 눌렀다.
+    toast(said ?? (APP.mode === "solving" ? "앞의 문제를 기다리는 중이에요." : "지금은 고를 수 없어요."));
     return;
   }
   APP.currentCell = cell;
   APP.mode = "solving";
+  render(); // 고를 수 없게 됐으니 녹색 후보도 그 즉시 꺼야 한다
+  watchReply("문제");
   // 문제는 미리 안 들고 있는다. 서버가 채점에 쓸 바로 그 문제를 보내 주면 그때 그린다.
-  netSend({ t: "pick", cell, actionId: newActionId() });
+  try {
+    await netSend({ t: "pick", cell, actionId: newActionId() });
+  } catch {
+    // 폴백 POST 가 실패하면 예전에는 조용히 사라져, 여기서 영영 갇혔다.
+    unstick("보내지 못했어요. 다시 눌러 보세요.");
+  }
 }
 
-function submitChoice(choice) {
+async function submitChoice(choice) {
   if (APP.submitting || APP.mode !== "solving") return;
   APP.submitting = true;
   // 두 번 눌리면 두 번째 채점이 실패하고, 그 실패가 화면을 굳게 만들었다(2026-08-09 "정").
   for (const b of $("quiz-options").querySelectorAll("button")) b.disabled = true;
-  netSend({ t: "answer", cell: APP.currentCell, choice, actionId: newActionId() });
+  watchReply("채점");
+  try {
+    await netSend({ t: "answer", cell: APP.currentCell, choice, actionId: newActionId() });
+  } catch {
+    // 보기가 전부 비활성인 채로 굳는 자리였다. 되돌려 다시 누를 수 있게 한다.
+    unstick("답을 보내지 못했어요. 다시 눌러 보세요.");
+  }
 }
 
 function showResult(msg) {
+  replyArrived();
   APP.submitting = false;
   APP.mode = "result";
   // patch 에는 "내" 정보가 없다. 서버가 알려 준 이 값을 안 넣으면

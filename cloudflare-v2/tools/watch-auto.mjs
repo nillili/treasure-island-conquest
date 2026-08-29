@@ -80,7 +80,17 @@ async function findRoom() {
   return null;
 }
 
-/** watch.mjs 를 붙이고, 끝날 때까지 기다린다. */
+/** 붙어 있는 동안 새 방이 열렸는지 살피는 간격. */
+const SWITCH_MS = 15000;
+
+/**
+ * watch.mjs 를 붙이고, 끝날 때까지 기다린다.
+ *
+ * 붙어 있는 동안에도 방 목록을 계속 살핀다. 끝난 방은 선생님이 닫지 않으면 계속
+ * 열린 채로 남는데, 예전에는 감시가 그 빈 방을 붙잡고 새 방을 따라가지 못했다
+ * (2026-08-29 오후, 58분 동안 빈 방만 508KB 기록했다).
+ * 목록은 최근에 만든 방이 앞이므로, 맨 앞이 바뀌면 그쪽으로 옮겨 붙는다.
+ */
 function attach(code) {
   return new Promise((done) => {
     const child = spawn(
@@ -89,8 +99,19 @@ function attach(code) {
       [fileURLToPath(new URL("./watch.mjs", import.meta.url)), "--room", code, "--save"],
       { stdio: "inherit" },
     );
-    child.on("exit", (exitCode) => done(exitCode ?? 0));
-    child.on("error", () => done(-1));
+
+    let moved = false;
+    const looking = setInterval(async () => {
+      const top = await findRoom();
+      if (!top || top.code === code) return;
+      moved = true;
+      say(`새 방 ${top.code} 이 열렸습니다 — 옮겨 붙습니다.`);
+      child.kill();
+    }, SWITCH_MS);
+
+    const finish = (exitCode) => { clearInterval(looking); done({ exitCode, moved }); };
+    child.on("exit", (exitCode) => finish(exitCode ?? 0));
+    child.on("error", () => finish(-1));
   });
 }
 
@@ -115,9 +136,12 @@ while (true) {
   say(`🎯 방 ${room.code} 발견 (${room.quizTitle ?? "퀴즈 미지정"}) — 기록을 시작합니다.`);
 
   const startedAt = Date.now();
-  const code = await attach(room.code);
+  const { exitCode, moved } = await attach(room.code);
   const lasted = Math.round((Date.now() - startedAt) / 1000);
-  say(`방 ${room.code} 기록 종료 (${lasted}초 · exit ${code})`);
+  say(`방 ${room.code} 기록 종료 (${lasted}초 · exit ${exitCode})`);
+
+  // 새 방으로 옮기려고 내가 끊은 것은 실패가 아니다. 곧바로 다음 방을 잡는다.
+  if (moved) { quickFails = 0; lastCode = room.code; continue; }
 
   // 붙자마자 죽으면 같은 방을 무한히 다시 붙게 된다. 몇 번 연달아 실패하면 간격을 벌린다.
   if (lasted < 5 && room.code === lastCode) {

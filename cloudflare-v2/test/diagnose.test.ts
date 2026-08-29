@@ -1,6 +1,9 @@
 import { SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import appJs from "../public/app.js?raw";
+import indexHtml from "../public/index.html?raw";
+import { BUILD } from "../src/diagnose";
 
 const BASE = "https://t.test";
 interface Diag {
@@ -86,5 +89,22 @@ describe("시스템 점검", () => {
     void sampleCsv;
     const d = await diagnose();
     expect(d.checks.every((c) => c.level !== "error")).toBe(true);
+  });
+});
+
+/**
+ * 캐시 버스팅은 세 곳이 한 몸이다 — 하나만 올리면 브라우저가 옛 화면을 계속 문다.
+ * 이 프로젝트에서 되풀이해 물린 자리라 사람 눈 대신 여기서 잡는다.
+ * (2026-08-10 청팀 이미지, 2026-08-29 학생 화면 갇힘 수정 때 모두 걸렸다)
+ */
+describe("캐시 버스팅", () => {
+  it("app.js · diagnose.ts · index.html 의 판번호가 모두 같다", () => {
+    const appBuild = /const APP_BUILD = "([^"]+)"/.exec(appJs)?.[1];
+    expect(appBuild, "app.js 에서 APP_BUILD 를 찾지 못했다").toBeTruthy();
+    expect(appBuild).toBe(BUILD);
+
+    const stamps = [...indexHtml.matchAll(/\?v=([0-9-]+)/g)].map((m) => m[1]);
+    expect(stamps.length, "index.html 에 ?v= 가 하나도 없다").toBeGreaterThan(0);
+    for (const stamp of stamps) expect(stamp).toBe(BUILD);
   });
 });
