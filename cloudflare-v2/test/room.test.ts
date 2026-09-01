@@ -21,6 +21,7 @@ interface StateMsg {
   scores: { H: { total: number; bonus: number }; C: { total: number; bonus: number } };
   cellLocks: Record<string, string>;
   myPlayer: { id: string; team: "H" | "C"; pos: number; playedThisTurn: boolean } | null;
+  iAmTrapped: boolean;
   maxPlayers: number;
   turnFx: { H: TurnFxMsg | null; C: TurnFxMsg | null };
 }
@@ -935,5 +936,96 @@ describe("턴 요약 (3D 무대)", () => {
 
     const mine = await myState(ids[0]);
     expect(mine.turnFx).toEqual((await teacherState()).turnFx);
+  });
+});
+
+describe("갇히면 한 판 쉰다 (2026-09-01 규칙)", () => {
+  const stub = () => env.ROOM.getByName(roomCode);
+
+  /** 시간을 앞으로 돌려 알람으로 턴을 넘긴다. [다음 턴] 명령은 2초 연타 방지에 걸린다. */
+  async function passTurn() {
+    await runInDurableObject(stub(), (_i, state) => {
+      state.storage.sql.exec("UPDATE room SET turn_ends_at = ? WHERE id = 1", Date.now() - 10_000);
+    });
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+  }
+
+  /** 이 사람의 둘레 8칸을 전부 임자 있는 칸으로 만들어 가둔다. */
+  async function wallIn(pos: number, rows: number, cols: number, owner: "H" | "C") {
+    await runInDurableObject(stub(), (_i, state) => {
+      for (const idx of neighborsOf(pos, rows, cols)) {
+        state.storage.sql.exec("UPDATE cells SET owner = ? WHERE idx = ?", owner, idx);
+      }
+    });
+  }
+
+  it("둘레가 다 막히면 그 턴을 쉬고, 옮겨 주지 않는다", async () => {
+    const s = await startGame();
+    const me = s.myPlayer!;
+    await wallIn(me.pos, s.rows, s.cols, me.team);
+
+    await passTurn(); // 상대 팀
+    await passTurn(); // 내 팀 — 여기서 갇힘 판정
+
+    const mine = await myState(me.id);
+    expect(mine.turnTeam).toBe(me.team);
+    expect(mine.iAmTrapped).toBe(true);
+    // 갇힌 자리에 그대로 있어야 한다. 몰아넣은 쪽이 결과를 볼 수 있어야 전략이 성립한다.
+    expect(mine.myPlayer!.pos).toBe(me.pos);
+  });
+
+  it("쉬는 동안에는 칸을 고를 수 없다", async () => {
+    const s = await startGame();
+    const me = s.myPlayer!;
+    const around = neighborsOf(me.pos, s.rows, s.cols);
+    await wallIn(me.pos, s.rows, s.cols, me.team);
+    await passTurn();
+    await passTurn();
+
+    const out = await rpc({ t: "pick", cell: around[0], actionId: crypto.randomUUID(), playerId: me.id });
+    expect(out.ok).toBeFalsy();
+    expect(out.msg).toContain("갇혀서");
+  });
+
+  it("한 판 쉬고 나면 다음 턴에 빈자리로 꺼내 준다 — 영영 갇히지 않는다", async () => {
+    const s = await startGame();
+    const me = s.myPlayer!;
+    await wallIn(me.pos, s.rows, s.cols, me.team);
+
+    await passTurn();
+    await passTurn(); // 갇혀서 쉬는 턴
+    expect((await myState(me.id)).iAmTrapped).toBe(true);
+
+    await passTurn();
+    await passTurn(); // 그다음 내 턴
+
+    const back = await myState(me.id);
+    expect(back.turnTeam).toBe(me.team);
+    expect(back.iAmTrapped).toBe(false);
+    expect(back.myPlayer!.pos).not.toBe(me.pos); // 빈자리로 옮겨졌다
+  });
+});
+
+describe("끝난 판의 점수는 얼어붙는다 (2026-09-01)", () => {
+  it("게임이 끝난 뒤 누가 들어와도 점수가 움직이지 않는다", async () => {
+    // 2026-09-01 수업에서 홍 43:38 승리가 뒤늦게 들어온 세 명 때문에 홍 37:39 로 뒤집혔다.
+    await join("민수");
+    await join("영희");
+    await teacherCmd("newgame");
+    await teacherCmd("next");
+    await teacherCmd("end");
+
+    const ended = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+    expect(ended.status).toBe("ended");
+    const before = { h: ended.scores.H.total, c: ended.scores.C.total };
+
+    // 끝난 방에 새 사람이 셋 들어온다 — 인원이 바뀌면 예전에는 홀수 보정이 다시 계산됐다
+    await join("늦은1");
+    await join("늦은2");
+    await join("늦은3");
+
+    const after = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+    expect(after.scores.H.total).toBe(before.h);
+    expect(after.scores.C.total).toBe(before.c);
   });
 });

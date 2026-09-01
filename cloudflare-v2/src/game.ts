@@ -327,7 +327,7 @@ export function placeLatePlayer(view: PlacementView, playerId: string): number {
  * 이게 없으면 게임이 진행될수록 자기 팀 땅에 둘러싸인 학생이 문제를 못 푼다.
  * 옮긴 학생의 id 목록을 돌려준다.
  */
-export function rescueTrapped(view: PlacementView, team: Team): string[] {
+export function rescueTrapped(view: PlacementView, team: Team, leaveAlone?: Set<string>): string[] {
   const occupied = occupiedMap(view, null);
   const moved: string[] = [];
 
@@ -335,6 +335,9 @@ export function rescueTrapped(view: PlacementView, team: Team): string[] {
     if (p.team !== team) continue;
     if (p.pos === null) continue;
     if (canChallengeFrom(view, p.pos, team)) continue;
+    // 이번 턴을 갇힌 벌로 쉬는 사람은 그 자리에 둔다. 몰아넣은 쪽이 결과를 볼 수 있어야
+    // 가두는 전략이 성립한다. 쉬고 난 다음 턴에 이 함수가 꺼내 준다.
+    if (leaveAlone?.has(p.id)) continue;
 
     const seen = new Set<number>();
     const queue: number[] = [p.pos];
@@ -353,6 +356,21 @@ export function rescueTrapped(view: PlacementView, team: Team): string[] {
     }
   }
   return moved;
+}
+
+/**
+ * 지금 갇혀 있는 학생의 id 목록. 둘레 8칸에 임자 없는 칸이 하나도 없는 사람이다.
+ *
+ * 2026-09-01 에 규칙이 바뀌었다. 예전에는 갇히면 조용히 빈자리로 옮겨 줬는데,
+ * 이제는 갇힌 그 턴을 쉰다 — 상대를 가두는 것이 하나의 수가 된다.
+ */
+export function trappedPlayers(view: PlacementView, team: Team): string[] {
+  const out: string[] = [];
+  for (const p of view.players) {
+    if (p.team !== team || p.pos === null) continue;
+    if (!canChallengeFrom(view, p.pos, team)) out.push(p.id);
+  }
+  return out;
 }
 
 /** 공격칸: 빼앗을 상대 칸 하나를 무작위로 고른다. 없으면 null. */

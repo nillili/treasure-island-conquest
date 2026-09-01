@@ -101,4 +101,23 @@ CREATE TABLE IF NOT EXISTS steals (
   player_id  TEXT PRIMARY KEY,
   granted_at INTEGER NOT NULL
 );
+
+-- 끝난 판의 점수를 그대로 얼려 둔다. 판이 끝난 뒤에는 여기 값만 보여 준다.
+-- 2026-09-01 수업에서 게임이 끝난 뒤 세 명이 들어오자 홀수 보정이 다시 계산되어
+-- 홍 43:38 승리가 홍 37:39 패배로 뒤집혔다. 발표된 승패와 화면이 달라 보였다.
+CREATE TABLE IF NOT EXISTS final_scores (
+  game_key    TEXT PRIMARY KEY,
+  h_territory INTEGER NOT NULL,
+  h_bonus     INTEGER NOT NULL,
+  c_territory INTEGER NOT NULL,
+  c_bonus     INTEGER NOT NULL
+);
+
+-- 갇혀서 이번 턴을 쉬는 학생. 어느 턴에 쉬는지까지 적는다.
+-- 폭풍(skip_turns)과 따로 두는 이유는 화면에 다른 말을 띄워야 하기 때문이다.
+-- players 에 컬럼을 더하지 않은 이유는 위 fx 와 같다.
+CREATE TABLE IF NOT EXISTS traps (
+  player_id TEXT PRIMARY KEY,
+  turn_key  TEXT NOT NULL
+);
 `;

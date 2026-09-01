@@ -13,6 +13,7 @@ import {
   nextTurn,
   placeLatePlayer,
   rescueTrapped,
+  trappedPlayers,
   cellLabel,
   turnKey,
   winnerOf,
@@ -226,6 +227,23 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   private scores(room: RoomRow): Scores {
+    // 끝난 판은 다시 계산하지 않는다. 홀수 보정은 그때그때의 인원을 세기 때문에,
+    // 게임이 끝난 뒤 누가 들어오거나 나가면 발표된 승패가 뒤집혀 보인다.
+    if (room.status === "ended" && room.game_id) {
+      const frozen = this.sql
+        .exec<{ h_territory: number; h_bonus: number; c_territory: number; c_bonus: number }>(
+          "SELECT h_territory, h_bonus, c_territory, c_bonus FROM final_scores WHERE game_key = ?",
+          room.game_id,
+        )
+        .toArray()[0];
+      if (frozen) {
+        return {
+          H: { territory: frozen.h_territory, bonus: frozen.h_bonus, total: frozen.h_territory + frozen.h_bonus },
+          C: { territory: frozen.c_territory, bonus: frozen.c_bonus, total: frozen.c_territory + frozen.c_bonus },
+        };
+      }
+    }
+
     const rows = this.sql
       .exec<{ owner: Team; n: number }>(
         "SELECT owner, COUNT(*) AS n FROM cells WHERE owner IS NOT NULL GROUP BY owner",
@@ -424,6 +442,7 @@ export class RoomDO extends DurableObject<Env> {
           }
         : null,
       iAmSkipping: me ? me.skip_turn_key === turnKey(room.turn_team, room.round) : false,
+      iAmTrapped: me ? this.isTrapped(me.id, turnKey(room.turn_team, room.round)) : false,
       myLastResult: me?.last_action_result ? JSON.parse(me.last_action_result) : null,
       maxPlayers: maxPlayers(room.rows, room.cols, room.round_limit),
       turnFx: this.fxAll(),
@@ -730,7 +749,28 @@ export class RoomDO extends DurableObject<Env> {
 
     const view = this.placementView({ ...room, turn_team: next.turnTeam, round: next.round });
     const before = this.snapshotView(view);
-    rescueTrapped(view, next.turnTeam);
+
+    // 갇히면 한 턴 쉰다(2026-09-01). 예전에는 곧바로 빈자리로 옮겨 줬지만, 이제는
+    // 갇힌 그 자리에서 한 턴을 쉬고 그다음 턴에 꺼내 준다. 상대를 가두는 것이 하나의 수가 된다.
+    //
+    // 직전 차례에 이미 쉰 사람은 또 가두지 않는다. 안 그러면 둘러싸인 채로 영영 쉰다.
+    const prevKey = turnKey(next.turnTeam, next.round - 1);
+    const rested = new Set(
+      this.sql
+        .exec<{ player_id: string }>("SELECT player_id FROM traps WHERE turn_key = ?", prevKey)
+        .toArray()
+        .map((r) => r.player_id),
+    );
+    // 이 팀 사람의 지난 기록만 지운다. 상대 팀 것은 그 팀 차례에 쓰인다.
+    for (const p of this.players()) {
+      if (p.team === next.turnTeam) this.sql.exec("DELETE FROM traps WHERE player_id = ?", p.id);
+    }
+    const nowTrapped = trappedPlayers(view, next.turnTeam).filter((id) => !rested.has(id));
+    for (const id of nowTrapped) {
+      this.sql.exec("INSERT OR REPLACE INTO traps (player_id, turn_key) VALUES (?, ?)", id, key);
+    }
+
+    rescueTrapped(view, next.turnTeam, new Set(nowTrapped));
     this.applyPlacement(view, before);
 
     this.sql.exec(
@@ -848,6 +888,16 @@ export class RoomDO extends DurableObject<Env> {
     // "중간에 멈춘 학생" 을 셀 수 없게 된다.
     this.recordGame(room, scores, winner, roster);
 
+    // 발표한 점수를 그대로 얼려 둔다. 아래에서 status 가 'ended' 가 되는 순간부터
+    // scores() 는 이 값을 읽는다 — 뒤늦게 들어온 사람이 결과를 흔들지 못한다.
+    if (room.game_id) {
+      this.sql.exec(
+        `INSERT OR REPLACE INTO final_scores
+           (game_key, h_territory, h_bonus, c_territory, c_bonus) VALUES (?, ?, ?, ?, ?)`,
+        room.game_id, scores.H.territory, scores.H.bonus, scores.C.territory, scores.C.bonus,
+      );
+    }
+
     // [종료] 버튼은 advanceTurn 을 안 거친다. 여기서 갈무리하지 않으면 마지막 턴에 터진
     // 보물이 화면에서 사라진 채로 게임이 끝난다. (자동 종료 경로에서 두 번 불려도 안전하다)
     this.captureFx();
@@ -858,6 +908,7 @@ export class RoomDO extends DurableObject<Env> {
     this.sql.exec(
       "UPDATE players SET pos = NULL, skip_turns = 0, skip_turn_key = NULL, last_played_turn_key = NULL",
     );
+    this.sql.exec("DELETE FROM traps"); // 끝난 판의 갇힘 표시를 다음 판까지 끌고 가지 않는다
     this.bump();
 
     return {
@@ -908,6 +959,10 @@ export class RoomDO extends DurableObject<Env> {
     );
     this.sql.exec("DELETE FROM events");
     this.sql.exec("DELETE FROM fx"); // 지난 게임의 3D 결과가 새 판에 남으면 안 된다
+    this.sql.exec("DELETE FROM traps"); // 갇힘 표시도 판이 바뀌면 무효다
+    // 지난 판에서 안 쓰고 남은 공격권도 여기서 버린다. 새 판 첫 턴에 갑자기 땅을 빼앗기면
+    // 아무도 영문을 모른다. (2026-09-01 에 traps 를 넣다가 함께 발견)
+    this.sql.exec("DELETE FROM steals");
     this.sql.exec(
       `UPDATE room SET status = 'waiting', game_id = ?, round = 1, turn_team = NULL, turn_ends_at = NULL,
                        bonus_h = 0, bonus_c = 0, last_turn_at = NULL WHERE id = 1`,
@@ -982,11 +1037,26 @@ export class RoomDO extends DurableObject<Env> {
     return this.player(id)!;
   }
 
+  /** 이 학생이 이번 턴을 "갇힘" 으로 쉬는 중인가. */
+  private isTrapped(playerId: string, key: string): boolean {
+    return (
+      this.sql
+        .exec<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM traps WHERE player_id = ? AND turn_key = ?",
+          playerId, key,
+        )
+        .one().n > 0
+    );
+  }
+
   private requirePlayable(room: RoomRow, me: PlayerRow): void {
     if (room.status !== "running") throw new Refused(E.notRunning, "아직 시작 전이에요. 선생님을 기다려 주세요.");
     if (me.team !== room.turn_team) throw new Refused(E.notMyTurn, "지금은 상대 팀 차례예요.");
     if (me.skip_turn_key === turnKey(room.turn_team, room.round)) {
       throw new Refused(E.skipping, "⛈️ 이번 턴은 폭풍으로 쉽니다.");
+    }
+    if (this.isTrapped(me.id, turnKey(room.turn_team, room.round))) {
+      throw new Refused(E.skipping, "🚧 갇혀서 이번 턴은 쉽니다.");
     }
     // 2초는 넘겨준다. 답을 누르는 순간 턴이 넘어가면 억울하다.
     if (Date.now() > (room.turn_ends_at ?? 0) + 2000) {

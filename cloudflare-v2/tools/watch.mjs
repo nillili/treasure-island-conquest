@@ -95,6 +95,8 @@ if (!check.exists) {
 // ── 감시 상태 ─────────────────────────────────────────────────────────────
 const seen = new Map(); // playerId -> 마지막으로 무언가 한 시각
 const quiet = new Map(); // playerId -> 자기 팀 턴인데 조용히 넘어간 횟수
+let lastShape = "";      // 직전에 적은 표의 모양. 같으면 다시 적지 않는다
+let skipped = 0;         // 같은 모양이라 건너뛴 횟수
 let state = null;
 let lastTurnKey = null;
 let lastLogAt = 0;
@@ -129,7 +131,9 @@ function onMessage(msg) {
   } else if (msg.t === "presence" && state) {
     state.presence = msg.online;
   } else if (msg.t === "gameover") {
-    say(`\n🏁 ${msg.winner} 승리 · 홍 ${msg.scores.H.total} : 청 ${msg.scores.C.total}`);
+    // 동점이면 "무승부 승리" 가 된다
+    const crown = msg.winner === "무승부" ? "무승부" : `${msg.winner} 승리`;
+    say(`\n🏁 ${crown} · 홍 ${msg.scores.H.total} : 청 ${msg.scores.C.total}`);
     for (const p of msg.players) say(`   ${pad(p.name, 10)} ${p.correct}/${p.solved}`);
   } else if (msg.t === "closed") {
     say("\n방이 닫혔습니다.");
@@ -199,6 +203,23 @@ function dashboard() {
 
   const online = new Set(state.presence ?? []);
   const left = Math.max(0, (state.turnEndsAt ?? 0) - now);
+
+  // 게임이 안 돌 때는 5초마다 똑같은 표를 다시 적지 않는다.
+  // 2026-09-01 에 수업이 끝난 뒤 빈 방을 2시간 33분 동안 적어 103KB 를 남겼다.
+  // 시각과 "마지막" 칸은 늘 변하니 판단에서 뺀다 — 실제로 달라진 것만 본다.
+  const shape = JSON.stringify([
+    state.status, state.round, state.turnTeam,
+    state.scores.H.total, state.scores.C.total,
+    [...online].sort(),
+    state.players.map((p) => [p.id, p.name, p.team, p.pos]).sort(),
+  ]);
+  if (state.status !== "running" && shape === lastShape) { skipped += 1; return; }
+  if (skipped) {
+    say(`  … 같은 상태로 ${skipped}번 지나갔습니다 (${Math.round(skipped * 5 / 60)}분)`);
+    skipped = 0;
+  }
+  lastShape = shape;
+
   say(`\n[${clock(now)}] ${state.status} · R${state.round}/${state.roundLimit} · `
     + `${state.turnTeam === "H" ? "홍팀" : state.turnTeam === "C" ? "청팀" : "대기"} · 남은 ${Math.floor(left / 1000)}초 · `
     + `홍 ${state.scores.H.total} : 청 ${state.scores.C.total} · 접속 ${online.size}/${state.players.length}`);

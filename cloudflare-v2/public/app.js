@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-08-29d";
+const APP_BUILD = "2026-09-01";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -134,6 +134,7 @@ function blockReason() {
   if (!st.myPlayer) return "관전";
   if (st.turnTeam !== st.myPlayer.team) return "상대팀턴";
   if (st.iAmSkipping) return "폭풍쉼";
+  if (st.iAmTrapped) return "갇힘쉼";
   if (st.myPlayer.playedThisTurn) return "이번턴완료";
   if (now() >= (st.turnEndsAt || 0)) return "시간초과";
   return "";
@@ -347,6 +348,7 @@ function renderStudent() {
   const why = blockReason();
   if (why === "게임종료") msg.innerHTML = "<b>게임이 끝났습니다.</b><br><small>선생님이 새 게임을 만들면 이어서 해요.</small>";
   else if (why === "폭풍쉼") msg.innerHTML = "<b>⛈️ 폭풍에 갇혔어요! 이번 턴은 쉽니다.</b>";
+  else if (why === "갇힘쉼") msg.innerHTML = "<b>🚧 갇혔습니다! 한 판 쉽니다.</b><br><small>다음 턴에 빈자리로 옮겨 드려요.</small>";
   else if (why === "이번턴완료") msg.innerHTML = "<b>이번 턴 문제를 풀었습니다.</b><br><small>상대 팀 차례가 끝날 때까지 기다려요.</small>";
   else if (why === "상대팀턴") msg.innerHTML = "<b>상대 팀 차례예요. 조금만 기다려요.</b>";
   else if (why === "시간초과") msg.innerHTML = "<b>이번 턴 시간이 끝났어요.</b><br><small>다음 턴을 기다려 주세요.</small>";
@@ -461,6 +463,7 @@ function onMessage(msg) {
       // "result" 도 건드리지 않는다. 남이 답한 patch 하나가 내 결과창을 밀어내면,
       // 닫기 타이머가 "내 차례가 아니네" 하고 되돌아가 창이 영영 남는다(2026-08-29).
       if (APP.mode !== "solving" && APP.mode !== "result") APP.mode = "waiting";
+      noticeTrapped();
       render();
       return;
     }
@@ -492,6 +495,7 @@ function onMessage(msg) {
         if (mine) APP.state.myPlayer.pos = mine.pos;
         APP.state.myPlayer.playedThisTurn = false;
         APP.state.iAmSkipping = false;
+        APP.state.iAmTrapped = false; // 이어지는 sync 가 참이면 다시 켜 준다
       }
       // "result" 도 건드리지 않는다. 남이 답한 patch 하나가 내 결과창을 밀어내면,
       // 닫기 타이머가 "내 차례가 아니네" 하고 되돌아가 창이 영영 남는다(2026-08-29).
@@ -625,6 +629,7 @@ async function selectCell(cell) {
       상대팀턴: "지금은 상대 팀 차례예요.",
       이번턴완료: "이번 턴 문제는 이미 풀었어요.",
       폭풍쉼: "⛈️ 이번 턴은 폭풍으로 쉽니다.",
+      갇힘쉼: "🚧 갇혀서 이번 턴은 쉽니다.",
       시작전: "아직 시작 전이에요. 선생님을 기다려 주세요.",
       게임종료: "게임이 끝났어요.",
       관전: "이 방의 내 자리를 찾지 못했어요. 새로고침 뒤 이름을 다시 넣어 주세요.",
@@ -705,6 +710,35 @@ function showResult(msg) {
       if (msg.stealGranted) startStealing();
     }, fxLinger(item));
   }, item ? 1200 : 3000);
+}
+
+/**
+ * 갇혔다고 한 번만 알린다.
+ *
+ * 5초마다 오는 state 마다 창을 다시 띄우면 아무것도 못 한다. 그래서 "어느 턴의 갇힘인지"
+ * 를 기억해 두고, 그 턴에 한 번만 띄운다. 그림은 없고 글자만이다 — 폭풍처럼 3D 를 만들면
+ * 가둔 쪽이 아니라 갇힌 쪽이 상을 받는 것처럼 보인다.
+ */
+let trapSaidFor = "";
+function noticeTrapped() {
+  const st = APP.state;
+  const key = `${st?.round}:${st?.turnTeam}`;
+  if (!st?.iAmTrapped || APP.role !== "student") { if (!st?.iAmTrapped) trapSaidFor = ""; return; }
+  if (trapSaidFor === key) return;
+  if (APP.mode === "solving" || APP.mode === "result") return; // 앞 창을 밀어내지 않는다
+  trapSaidFor = key;
+
+  $("result-big").className = "big no";
+  $("result-big").textContent = "🚧 갇혔습니다";
+  $("result-message").textContent = "둘레가 모두 막혔어요. 한 판 쉽니다.";
+  $("result-gain").textContent = "다음 턴에 빈자리로 옮겨 드려요";
+  showPlay("result");
+
+  const mine = ++playGen;
+  setTimeout(() => {
+    if (playGen !== mine) return; // 그 사이 새 창이 떴다
+    closePlay();
+  }, 3000);
 }
 
 /**
@@ -1061,8 +1095,10 @@ function showGameOver(msg) {
   const rows = msg.players
     .map((p, i) => `<div class="kv"><span>${medal[i] ?? "&nbsp;&nbsp;"} ${p.team === "H" ? "🔴" : "🟢"} ${esc(p.name)}</span><b>${p.correct} / ${p.solved}</b></div>`)
     .join("");
+  // 동점이면 "무승부 승리" 가 된다. 2026-09-01 수업에서 실제로 그렇게 떴다.
+  const crown = msg.winner === "무승부" ? "무승부" : `${msg.winner} 승리`;
   showInfo("🏁 게임 끝!",
-    `<div class="roomcode" style="font-size:34px;letter-spacing:2px">${esc(msg.winner)} 승리</div>
+    `<div class="roomcode" style="font-size:34px;letter-spacing:2px">${esc(crown)}</div>
      <div class="scores" style="margin:10px 0">
        <div class="team score-H">홍팀 <b>${msg.scores.H.total}</b></div>
        <small>영토 ${msg.scores.H.territory} + 보너스 ${msg.scores.H.bonus}</small>

@@ -148,3 +148,4 @@ console.log(`⑥ 다시 누름 → 서버로 나간 요청 ${before} → ${now2}
 if (now2 <= before) { console.error("\n❌ 풀린 척만 하고 실제로는 못 누른다"); process.exit(1); }
 
 console.log("\n✅ 스스로 풀려났고, 다시 누르니 요청이 나간다");
+process.exit(0); // app.js 의 타이머가 계속 돌아 저절로 끝나지 않는다
