@@ -625,11 +625,12 @@ export class RoomDO extends DurableObject<Env> {
       if (seen.has(p.pos!)) duplicates++;
       seen.add(p.pos!);
     }
-    // 둘레가 전부 아군이라 도전할 칸이 없는 학생 — 이게 있으면 그 학생은 아무것도 못 한다
-    const owners = cells.map((c) => c.owner);
-    const stuck = placed
-      .filter((p) => !neighbors8(p.pos!, room.rows, room.cols).some((n) => owners[n] !== p.team))
-      .map((p) => p.name);
+    // 우리 땅을 밟고도 나갈 데가 없는 학생 — 게임 규칙의 "갇힘" 과 똑같은 잣대를 쓴다.
+    // 예전에는 여기서 둘레가 전부 아군인 경우만 셌는데, 그건 오히려 갇힌 것이 아닌 경우다
+    // (아군 땅을 타고 걸어 나올 수 있다). 상대에게 에워싸인 진짜 갇힘을 놓치고 있었다.
+    const view = this.placementView(room);
+    const trapped = new Set([...trappedPlayers(view, "H"), ...trappedPlayers(view, "C")]);
+    const stuck = placed.filter((p) => trapped.has(p.id)).map((p) => p.name);
 
     return {
       ready: true, code: room.code, label: room.label, quizTitle: room.quiz_title,

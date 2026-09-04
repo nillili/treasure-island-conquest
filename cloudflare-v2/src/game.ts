@@ -323,8 +323,57 @@ export function placeLatePlayer(view: PlacementView, playerId: string): number {
 }
 
 /**
- * 턴 시작 시 아군 영토에 갇힌 학생을 가장 가까운 도전 가능한 빈자리로 옮긴다.
- * 이게 없으면 게임이 진행될수록 자기 팀 땅에 둘러싸인 학생이 문제를 못 푼다.
+ * 우리 팀 땅을 밟고 걸어 나가 도전할 수 있는 자리를 찾는다. 없으면 null.
+ *
+ * 둘레 8칸이 다 막혔다고 곧바로 갇힌 것은 아니다(2026-09-04 규칙 확정).
+ *   · 상대 땅이 사방을 둘러쌌고 우리 땅도 함께 갇혔다 → 진짜 갇힘. 한 턴 쉰다.
+ *   · 둘레는 막혔지만 우리 땅이 바깥까지 이어져 있다 → 그 길로 걸어 나온다. 안 쉰다.
+ *
+ * 그래서 밟고 다닐 수 있는 것은 **우리 팀 땅뿐**이다. 상대 땅은 길이 되지 않고,
+ * 빈 칸은 길이 아니라 목적지다 — 빈 칸이 옆에 있는 순간 거기서 도전할 수 있기 때문이다.
+ */
+function escapeCell(
+  view: PlacementView,
+  from: number,
+  team: Team,
+  blocked?: Set<number>,
+): number | null {
+  const seen = new Set<number>([from]);
+  const queue: number[] = [from];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    if (!blocked?.has(cur) && canChallengeFrom(view, cur, team)) return cur;
+    for (const n of neighbors8(cur, view.rows, view.cols)) {
+      if (!seen.has(n) && view.owners[n] === team) {
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+  }
+  return null;
+}
+
+/** 우리 땅이 통째로 갇혔을 때 쓰는 마지막 수단 — 팀을 안 가리고 가장 가까운 빈자리를 찾는다. */
+function nearestUsable(
+  view: PlacementView,
+  from: number,
+  team: Team,
+  occupied: Set<number>,
+): number | null {
+  const seen = new Set<number>();
+  const queue: number[] = [from];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    if (cur !== from && !occupied.has(cur) && canChallengeFrom(view, cur, team)) return cur;
+    for (const n of neighbors8(cur, view.rows, view.cols)) if (!seen.has(n)) queue.push(n);
+  }
+  return null;
+}
+
+/**
+ * 턴 시작 시 제자리에서 도전할 수 없는 학생을 걸어 나올 자리로 옮긴다.
  * 옮긴 학생의 id 목록을 돌려준다.
  */
 export function rescueTrapped(view: PlacementView, team: Team, leaveAlone?: Set<string>): string[] {
@@ -339,36 +388,31 @@ export function rescueTrapped(view: PlacementView, team: Team, leaveAlone?: Set<
     // 가두는 전략이 성립한다. 쉬고 난 다음 턴에 이 함수가 꺼내 준다.
     if (leaveAlone?.has(p.id)) continue;
 
-    const seen = new Set<number>();
-    const queue: number[] = [p.pos];
-    while (queue.length) {
-      const cur = queue.shift()!;
-      if (seen.has(cur)) continue;
-      seen.add(cur);
-      if (cur !== p.pos && !occupied.has(cur) && canChallengeFrom(view, cur, team)) {
-        occupied.delete(p.pos);
-        p.pos = cur;
-        occupied.add(cur);
-        moved.push(p.id);
-        break;
-      }
-      for (const n of neighbors8(cur, view.rows, view.cols)) if (!seen.has(n)) queue.push(n);
-    }
+    // ① 우리 땅을 타고 나가는 길. 이게 있으면 애초에 갇힌 것이 아니었다.
+    // ② 길이 없다면 이미 한 턴 쉰 사람이다. 영영 갇히지 않도록 아무 빈자리로나 꺼낸다.
+    const to = escapeCell(view, p.pos, team, occupied) ?? nearestUsable(view, p.pos, team, occupied);
+    if (to === null || to === p.pos) continue;
+
+    occupied.delete(p.pos);
+    p.pos = to;
+    occupied.add(to);
+    moved.push(p.id);
   }
   return moved;
 }
 
 /**
- * 지금 갇혀 있는 학생의 id 목록. 둘레 8칸에 임자 없는 칸이 하나도 없는 사람이다.
+ * 지금 진짜로 갇힌 학생의 id 목록 — 우리 팀 땅을 아무리 밟고 다녀도 도전할 자리가 없는 사람.
  *
- * 2026-09-01 에 규칙이 바뀌었다. 예전에는 갇히면 조용히 빈자리로 옮겨 줬는데,
- * 이제는 갇힌 그 턴을 쉰다 — 상대를 가두는 것이 하나의 수가 된다.
+ * 2026-09-01 에 갇히면 한 턴 쉬는 규칙이 들어왔고, 2026-09-04 에 "갇힘"의 뜻을 좁혔다.
+ * 그전에는 둘레 8칸만 봐서, 후반에 자기 팀 땅 한가운데 선 학생까지 억울하게 쉬었다.
+ * 이제는 우리 땅이 바깥과 끊겼을 때만 쉰다 — 상대를 에워싸는 것이 하나의 수가 된다.
  */
 export function trappedPlayers(view: PlacementView, team: Team): string[] {
   const out: string[] = [];
   for (const p of view.players) {
     if (p.team !== team || p.pos === null) continue;
-    if (!canChallengeFrom(view, p.pos, team)) out.push(p.id);
+    if (escapeCell(view, p.pos, team, occupiedMap(view, p.id)) === null) out.push(p.id);
   }
   return out;
 }

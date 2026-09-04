@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-04";
+const APP_BUILD = "2026-09-04b";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -939,14 +939,123 @@ const selectedSetId = () => {
   return picked ? Number(picked.value) : 0;
 };
 
+// ── 인원 하나로 판을 짠다 (2026-09-04) ──────────────────────────────────────
+//
+// 1라운드는 홍 턴 + 청 턴이라(game.ts nextTurn) 학생 한 명이 한 라운드에 먹을 수 있는 칸은
+// 많아야 하나다. 정답일 때만 칸을 먹고(room.ts answer), 임자 있는 칸은 다시 못 먹으니
+// (game.ts canChallengeFrom) 칸이 재활용되지 않는다. 그래서
+//
+//     끝났을 때 채워진 칸 = 인원 + 총정답수 = 인원 × (1 + 판수 × CLAIM)
+//
+// D1 게임 기록 16판으로 확인했다 — CLAIM 중앙값 0.65, 최저 0.50, 최고 0.89.
+const CLAIM = 0.65;
+
+// 9명 · 10판 · 12×12 가 정확히 절반(72/144)이었고, 그 판이 좋았다.
+// 절반이 차야 영역끼리 맞닿아 서로 가둘 수 있고, 절반이 남아야 처음부터 갇히는 학생이 없다.
+const FILL_AIM = 0.50;
+
+// 판이 마르기 시작하는 선. 처음에는 55% 로 잡았는데 30명이 4판밖에 못 하게 나왔다.
+// 4판은 수업이 아니다. 그래서 상한을 60% 로 올리고 판수에 하한을 뒀다 — 30명 6판(65%),
+// 23명 7판(57%). 사람이 많을수록 판이 빽빽해지지만, 그래야 게임다운 길이가 나온다.
+const FILL_MAX = 0.60;
+const ROUNDS_MIN = 6; // 아무리 사람이 많아도 이보다 짧게는 줄이지 않는다
+const SIDE_MIN = 10;   // game.ts 의 MIN_SIDE
+const SIDE_MAX = 15;   // game.ts 의 MAX_SIDE
+const SPECIAL_MAX = 0.40; // 특수칸이 이보다 많으면 보통 칸으로 하는 게임이 아니게 된다
+
+// 특수칸 기준점 — 9명 판(12×12 · 10판)에서 📦8 ⛈️12 💥12.
+// 원래 기본값 8·7·7 은 폭풍과 공격권이 너무 안 나왔다(2026-09-04 확인).
+const SPECIAL_BASE = { cells: 144, rounds: 10, t: 8, s: 12, a: 12 };
+
+/** 방 정원. game.ts 의 maxPlayers 와 같은 식이어야 한다 — tools/plan-check.mjs 가 대조한다. */
+function maxPlayers(rows, cols, rounds) {
+  const cells = rows * cols;
+  return Math.max(1, Math.min(Math.floor(cells / 2.4), Math.floor(cells / (1 + rounds * 0.85))));
+}
+
+/** 이 인원이 이 판수를 다 돌면 채워질 칸 수. */
+function claimedCells(players, rounds) {
+  return players * (1 + CLAIM * rounds);
+}
+
+/**
+ * 인원을 넣으면 판 크기 · 판수 · 특수칸을 한꺼번에 정해 준다.
+ * 판은 15×15 보다 크게 만들 수 없으므로, 17명쯤부터는 판수를 깎아서 맞춘다.
+ */
+function planFor(players, rounds) {
+  const n = Math.max(1, Math.round(players) || 1);
+  let want = Math.max(1, Math.round(rounds) || SPECIAL_BASE.rounds);
+
+  // ① 판 크기 — 다 끝났을 때 절반이 차는 크기에 가장 가까운 한 변
+  const off = (side) => Math.abs(claimedCells(n, want) / (side * side) - FILL_AIM);
+  let side = SIDE_MIN;
+  for (let s = SIDE_MIN + 1; s <= SIDE_MAX; s++) if (off(s) < off(side)) side = s;
+  const cells = side * side;
+
+  // ② 판수 — 판을 더 키울 수 없는데도 넘치면 판수를 깎는다. 19명부터 여기에 걸린다.
+  //    선생님이 일부러 짧게 잡아 둔 판수는 건드리지 않는다(min). 하한 아래로도 안 내려간다(max).
+  if (claimedCells(n, want) > cells * FILL_MAX) {
+    const fits = Math.floor((cells * FILL_MAX / n - 1) / CLAIM);
+    want = Math.min(want, Math.max(ROUNDS_MIN, fits));
+  }
+
+  // ③ 특수칸 — 학생 한 명이 한 판에서 만나는 특수칸 수를 9명 판과 같게 맞춘다.
+  //    만나는 횟수 = 채워진 칸 × 특수칸 비율 ÷ 인원 = (1 + 판수 × CLAIM) × 특수칸 ÷ 전체 칸
+  //    이라 인원은 약분된다. 판이 커지면 늘리고, 판수가 줄면 만날 기회가 주니 더 촘촘히 깐다.
+  const base = SPECIAL_BASE.t + SPECIAL_BASE.s + SPECIAL_BASE.a;
+  const denser = (1 + CLAIM * SPECIAL_BASE.rounds) / (1 + CLAIM * want);
+  const total = Math.min(
+    Math.floor(cells * SPECIAL_MAX),
+    Math.round(base * (cells / SPECIAL_BASE.cells) * denser),
+  );
+  const cntT = Math.round((total * SPECIAL_BASE.t) / base);
+  const cntS = Math.round((total * SPECIAL_BASE.s) / base);
+  return { rows: side, cols: side, rounds: want, cntT, cntS, cntA: total - cntT - cntS };
+}
+
+/** 이 인원이 이 판을 얼마만큼 채우려면 몇 판이 필요한가. 힌트에 숫자로 찍어 준다. */
+function roundsForFill(players, cells, target) {
+  if (players < 1) return 1;
+  return Math.max(1, Math.min(30, Math.round((cells * target / players - 1) / CLAIM)));
+}
+
+/** 인원 칸을 건드리면 나머지를 전부 다시 잡는다. */
+function applyPlan() {
+  const plan = planFor(Number($("cfg-players").value), Number($("cfg-round").value));
+  $("cfg-rows").value = plan.rows;
+  $("cfg-cols").value = plan.cols;
+  $("cfg-round").value = plan.rounds;
+  $("cfg-t").value = plan.cntT;
+  $("cfg-s").value = plan.cntS;
+  $("cfg-a").value = plan.cntA;
+  updateSizeHint();
+}
+
 function updateSizeHint() {
   const rows = Number($("cfg-rows").value);
   const cols = Number($("cfg-cols").value);
+  const rounds = Number($("cfg-round").value);
+  const players = Number($("cfg-players").value);
   const set = APP.sets.find((s) => s.id === selectedSetId());
   const cells = rows * cols;
-  const repeats = set ? Math.ceil(cells / set.itemCount) : 0;
-  $("size-hint").innerHTML = `${rows}×${cols} = <b>${cells}칸</b> · 정원 <b>${Math.floor(cells / 2.4)}명</b>`
-    + (set ? ` · 문항 ${set.itemCount}개라 각 문제가 최대 ${repeats}번 나와요` : "");
+  const specials = Number($("cfg-t").value) + Number($("cfg-s").value) + Number($("cfg-a").value);
+  const cap = maxPlayers(rows, cols, rounds);
+  const fill = cells > 0 ? claimedCells(players, rounds) / cells : 0;
+
+  // 판정은 하나만 보여 준다. 여러 줄로 늘어놓으면 선생님이 어느 것을 고쳐야 할지 모른다.
+  let verdict;
+  if (players > cap) verdict = `<b class="bad">정원 초과예요 — 이 판은 ${cap}명까지</b>`;
+  else if (specials >= cells) verdict = '<b class="bad">특수칸이 판보다 많아요</b>';
+  else if (fill > FILL_MAX + 0.08) verdict = `<b class="bad">판이 말라요</b> — ${roundsForFill(players, cells, FILL_MAX)}판으로 줄이세요`;
+  // 판은 10×10 보다 작게 만들 수 없다. 그래서 인원이 적으면 판수로 채우는 수밖에 없는데,
+  // 선생님이 일부러 짧게 잡았을 수도 있으니 고쳐 주지는 않고 몇 판이면 되는지만 알려 준다.
+  else if (fill < 0.35) verdict = `<b>판이 헐렁해요</b> — ${roundsForFill(players, cells, FILL_AIM)}판이면 절반이 차요`;
+  else verdict = "<b>딱 좋아요</b>";
+
+  $("size-hint").innerHTML =
+    `${rows}×${cols} = <b>${cells}칸</b> · ${players}명이 ${rounds}판 하면 `
+    + `<b>${Math.round(fill * 100)}%</b> 채워요 · ${verdict}`
+    + (set ? `<br>문항 ${set.itemCount}개라 각 문제가 최대 ${Math.ceil(cells / set.itemCount)}번 나와요` : "");
 }
 
 // ── 클릭 ────────────────────────────────────────────────────────────────────
@@ -1272,7 +1381,11 @@ async function createRoom() {
   }
 }
 
-for (const id of ["cfg-rows", "cfg-cols"]) $(id).addEventListener("input", updateSizeHint);
+// 인원은 나머지를 전부 다시 잡고, 나머지는 손으로 고쳐도 그대로 둔 채 판정만 새로 한다.
+$("cfg-players").addEventListener("input", applyPlan);
+for (const id of ["cfg-rows", "cfg-cols", "cfg-round", "cfg-t", "cfg-s", "cfg-a"]) {
+  $(id).addEventListener("input", updateSizeHint);
+}
 $("quizsets").addEventListener("change", updateSizeHint);
 
 // ── 관제 (슈퍼관리자 전용) ─────────────────────────────────────────────────

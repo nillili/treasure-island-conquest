@@ -17,6 +17,7 @@ import {
   placeLatePlayer,
   rc,
   rescueTrapped,
+  trappedPlayers,
   winnerOf,
   type Owner,
   type PlacementPlayer,
@@ -198,6 +199,57 @@ describe("배치", () => {
     const v = view(12, 12, [{ id: "ok", team: "H", pos: 20 }]);
     expect(rescueTrapped(v, "H")).toEqual([]);
     expect(v.players[0]!.pos).toBe(20);
+  });
+});
+
+// ── 갇힘 — 우리 땅으로 나갈 길이 있는가 (2026-09-04) ────────────────────────
+//
+// 둘레 8칸이 다 막혔다고 갇힌 것이 아니다. 우리 팀 땅이 바깥까지 이어져 있으면
+// 그 길을 밟고 걸어 나올 수 있다. 우리 땅까지 통째로 에워싸였을 때만 한 턴을 쉰다.
+describe("갇힘 판정", () => {
+  const ring = [6, 7, 8, 11, 13, 16, 17, 18]; // 5×5 한가운데(12) 의 둘레 8칸
+
+  /** 5×5 한가운데 홍팀 학생을 세우고 둘레를 칠한다. */
+  function middle(paint: (i: number) => Team): PlacementView {
+    const v = view(5, 5, [{ id: "me", team: "H", pos: 12 }]);
+    v.owners[12] = "H";
+    for (const i of ring) v.owners[i] = paint(i);
+    return v;
+  }
+
+  it("상대팀이 사방을 막으면 갇힌다", () => {
+    expect(trappedPlayers(middle(() => "C"), "H")).toEqual(["me"]);
+  });
+
+  it("아군 땅에 둘러싸인 것은 갇힌 것이 아니다 — 그 땅이 바깥과 닿아 있다", () => {
+    expect(trappedPlayers(middle(() => "H"), "H")).toEqual([]);
+  });
+
+  it("상대가 막았어도 우리 땅 한 칸이 바깥으로 이어지면 갇힌 것이 아니다", () => {
+    expect(trappedPlayers(middle((i) => (i === 6 ? "H" : "C")), "H")).toEqual([]);
+  });
+
+  it("우리 땅까지 통째로 에워싸이면 갇힌다", () => {
+    // 안쪽 3×3 은 우리 땅, 바깥 테두리는 전부 상대 땅 — 밟고 갈 곳이 없다.
+    const v = view(5, 5, [{ id: "me", team: "H", pos: 12 }]);
+    for (let i = 0; i < 25; i++) v.owners[i] = "C";
+    for (const i of [...ring, 12]) v.owners[i] = "H";
+    expect(trappedPlayers(v, "H")).toEqual(["me"]);
+  });
+
+  it("갇힌 것이 아니면 우리 땅을 밟고 나갈 자리로 옮겨진다", () => {
+    const v = middle(() => "H");
+    expect(rescueTrapped(v, "H")).toEqual(["me"]);
+    expect(canChallengeFrom(v, v.players[0]!.pos!, "H")).toBe(true);
+  });
+
+  it("한 턴 쉰 사람은 우리 땅이 없어도 꺼내 준다 — 영영 갇히지 않는다", () => {
+    const v = view(5, 5, [{ id: "me", team: "H", pos: 12 }]);
+    v.owners[12] = "H";
+    for (const i of ring) v.owners[i] = "C";
+    expect(trappedPlayers(v, "H")).toEqual(["me"]); // 갇힌 그 턴
+    expect(rescueTrapped(v, "H")).toEqual(["me"]);  // 그다음 턴 (leaveAlone 없음)
+    expect(canChallengeFrom(v, v.players[0]!.pos!, "H")).toBe(true);
   });
 });
 

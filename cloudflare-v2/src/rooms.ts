@@ -17,16 +17,17 @@ import { sweepStaleRooms } from "./sweep";
 const CODE_TRIES = 20;
 const PROVISION_STALE_MS = 10 * 60 * 1000; // 이보다 오래 준비 중인 방번호는 회수한다
 
-// 한 반이 보통 16명, 많아야 20명이다(2026-08-09 확인).
-// 12×12 = 144칸이면 20명이 서로 멀찍이 흩어질 수 있다.
+// 화면이 인원에 맞춰 값을 보내 주므로(public/app.js 의 planFor) 여기 값은 그것이 오지 않을 때만
+// 쓰인다. 10명 기준이다 — 12×12 · 10판이면 끝났을 때 절반쯤 찬다.
+// 폭풍·공격권은 원래 7·7 이었는데 너무 안 나와서 12·12 로 올렸다(2026-09-04).
 const DEFAULTS = {
   rows: 12,
   cols: 12,
   roundLimit: 10,
   turnSeconds: 20,
   cntT: 8,
-  cntS: 7,
-  cntA: 7,
+  cntS: 12,
+  cntA: 12,
 };
 
 function num(value: unknown, fallback: number): number {

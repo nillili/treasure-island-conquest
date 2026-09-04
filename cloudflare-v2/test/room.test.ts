@@ -956,7 +956,7 @@ describe("턴 요약 (3D 무대)", () => {
   });
 });
 
-describe("갇히면 한 판 쉰다 (2026-09-01 규칙)", () => {
+describe("갇히면 한 판 쉰다 (2026-09-01 규칙 · 2026-09-04 뜻 좁힘)", () => {
   const stub = () => env.ROOM.getByName(roomCode);
 
   /** 시간을 앞으로 돌려 알람으로 턴을 넘긴다. [다음 턴] 명령은 2초 연타 방지에 걸린다. */
@@ -967,6 +967,8 @@ describe("갇히면 한 판 쉰다 (2026-09-01 규칙)", () => {
     expect(await runDurableObjectAlarm(stub())).toBe(true);
   }
 
+  const enemyOf = (team: "H" | "C") => (team === "H" ? "C" : "H");
+
   /** 이 사람의 둘레 8칸을 전부 임자 있는 칸으로 만들어 가둔다. */
   async function wallIn(pos: number, rows: number, cols: number, owner: "H" | "C") {
     await runInDurableObject(stub(), (_i, state) => {
@@ -976,10 +978,10 @@ describe("갇히면 한 판 쉰다 (2026-09-01 규칙)", () => {
     });
   }
 
-  it("둘레가 다 막히면 그 턴을 쉬고, 옮겨 주지 않는다", async () => {
+  it("상대팀이 둘레를 다 막으면 그 턴을 쉬고, 옮겨 주지 않는다", async () => {
     const s = await startGame();
     const me = s.myPlayer!;
-    await wallIn(me.pos, s.rows, s.cols, me.team);
+    await wallIn(me.pos, s.rows, s.cols, enemyOf(me.team));
 
     await passTurn(); // 상대 팀
     await passTurn(); // 내 팀 — 여기서 갇힘 판정
@@ -995,7 +997,7 @@ describe("갇히면 한 판 쉰다 (2026-09-01 규칙)", () => {
     const s = await startGame();
     const me = s.myPlayer!;
     const around = neighborsOf(me.pos, s.rows, s.cols);
-    await wallIn(me.pos, s.rows, s.cols, me.team);
+    await wallIn(me.pos, s.rows, s.cols, enemyOf(me.team));
     await passTurn();
     await passTurn();
 
@@ -1004,10 +1006,26 @@ describe("갇히면 한 판 쉰다 (2026-09-01 규칙)", () => {
     expect(out.msg).toContain("갇혀서");
   });
 
-  it("한 판 쉬고 나면 다음 턴에 빈자리로 꺼내 준다 — 영영 갇히지 않는다", async () => {
+  // 2026-09-04. 예전에는 둘레 8칸만 보고 갇혔다고 했다. 그러면 후반에 자기 팀 땅 한가운데
+  // 선 학생까지 억울하게 쉬었다. 우리 땅이 바깥과 이어져 있으면 그 길로 걸어 나오면 된다.
+  it("아군 땅에 둘러싸이면 쉬지 않는다 — 그 길로 걸어 나온다", async () => {
     const s = await startGame();
     const me = s.myPlayer!;
     await wallIn(me.pos, s.rows, s.cols, me.team);
+
+    await passTurn();
+    await passTurn(); // 내 턴
+
+    const mine = await myState(me.id);
+    expect(mine.turnTeam).toBe(me.team);
+    expect(mine.iAmTrapped).toBe(false);
+    expect(mine.myPlayer!.pos).not.toBe(me.pos); // 우리 땅을 밟고 걸어 나왔다
+  });
+
+  it("한 판 쉬고 나면 다음 턴에 빈자리로 꺼내 준다 — 영영 갇히지 않는다", async () => {
+    const s = await startGame();
+    const me = s.myPlayer!;
+    await wallIn(me.pos, s.rows, s.cols, enemyOf(me.team));
 
     await passTurn();
     await passTurn(); // 갇혀서 쉬는 턴

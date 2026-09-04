@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-09-04">
-<script src="/net.js?v=2026-09-04" defer></script>
-<script src="/app.js?v=2026-09-04" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-09-04b">
+<script src="/net.js?v=2026-09-04b" defer></script>
+<script src="/app.js?v=2026-09-04b" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -91,18 +91,21 @@
       <h2>🆕 방 만들기</h2>
       <div class="field"><label for="cfg-label">반 이름</label>
         <input class="input" id="cfg-label" maxlength="20" placeholder="예: 3학년 2반"></div>
+      <!-- 인원만 넣으면 아래 판 크기·판수·특수칸이 한꺼번에 잡힌다. 셋 다 손으로 고쳐도 된다. -->
+      <div class="field"><label for="cfg-players">인원 · 판수</label><div class="field-row">
+        <label class="mini">인원<input class="input" id="cfg-players" type="number" min="2" max="30" value="10"></label>
+        <label class="mini">판수<input class="input" id="cfg-round" type="number" min="1" max="30" value="10"></label>
+      </div></div>
       <div class="field"><label>판 크기</label><div class="field-row">
         <input class="input" id="cfg-rows" type="number" min="10" max="15" value="12">
         <input class="input" id="cfg-cols" type="number" min="10" max="15" value="12">
       </div></div>
       <div class="field"><label for="cfg-time">턴 시간(초)</label>
         <input class="input" id="cfg-time" type="number" min="10" max="300" value="20"></div>
-      <div class="field"><label for="cfg-round">라운드</label>
-        <input class="input" id="cfg-round" type="number" min="1" max="30" value="10"></div>
       <div class="field"><label>특수칸 📦⛈️💥</label><div class="field-row">
         <input class="input" id="cfg-t" type="number" min="0" value="8">
-        <input class="input" id="cfg-s" type="number" min="0" value="7">
-        <input class="input" id="cfg-a" type="number" min="0" value="7">
+        <input class="input" id="cfg-s" type="number" min="0" value="12">
+        <input class="input" id="cfg-a" type="number" min="0" value="12">
       </div></div>
       <div id="size-hint" class="hint"></div>
       <div class="modal-actions">

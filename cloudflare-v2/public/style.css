@@ -261,3 +261,10 @@
 .help-row span{margin-left:auto;font-size:11px;color:#8a5a55;white-space:nowrap}
 .help-how{display:block;margin-top:7px;color:#8a5a55;font-size:11px;text-align:right}
 @keyframes help-breathe{50%{box-shadow:0 0 0 4px #e05a4f33,0 5px 18px #163b5855}}
+
+/* 인원·판수처럼 한 줄에 서로 다른 숫자를 둘 때 — 무엇을 적는 칸인지 위에 작게 적는다 (2026-09-04) */
+.mini{flex:1;display:block;font-size:12px;color:#6d8390}
+/* 입력 칸은 캡션 크기를 물려받으면 안 된다 — 옆줄의 다른 칸과 같은 크기(1rem)로 못 박는다 */
+.mini .input{margin-top:2px;font-size:1rem}
+/* 판 크기 안내는 숫자를 읽는 줄이다. 다른 hint 보다 한 치수 크게 */
+#size-hint{font-size:13px;line-height:1.6}
