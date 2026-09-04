@@ -17,7 +17,7 @@ interface StateMsg {
   turnEndsAt: number | null;
   quizTitle: string;
   board: { t: string; o: string | null }[];
-  players: { id: string; name: string; team: "H" | "C"; pos: number | null }[];
+  players: { id: string; name: string; team: "H" | "C"; pos: number | null; lastRound: number }[];
   scores: { H: { total: number; bonus: number }; C: { total: number; bonus: number } };
   cellLocks: Record<string, string>;
   myPlayer: { id: string; team: "H" | "C"; pos: number; playedThisTurn: boolean } | null;
@@ -249,6 +249,23 @@ describe("게임 진행", () => {
       expect(after.myPlayer!.pos).toBe(cell);
     }
     expect(after.myPlayer!.playedThisTurn).toBe(true);
+  });
+
+  it("마지막으로 푼 라운드를 함께 보낸다 — 선생님 화면이 조용한 학생을 가리는 재료", async () => {
+    const state = await startGame();
+    const id = state.myPlayer!.id;
+    expect(state.players.every((p) => p.lastRound === 0)).toBe(true);
+
+    const cell = pickableCell(state);
+    await rpc({ t: "pick", cell, actionId: "p1", playerId: id });
+    await rpc({ t: "answer", cell, choice: 0, actionId: "a1", playerId: id });
+
+    const after = await myState(id);
+    expect(after.players.find((p) => p.id === id)!.lastRound).toBe(after.round);
+    // 아직 한 문제도 안 낸 학생은 0 그대로다. 그래야 라운드가 갈수록 벌어져 눈에 띈다.
+    const others = after.players.filter((p) => p.id !== id);
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((p) => p.lastRound === 0)).toBe(true);
   });
 
   it("한 턴에 두 번은 못 푼다", async () => {

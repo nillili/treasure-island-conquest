@@ -249,3 +249,15 @@
 .sup-newpw{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:30px;font-weight:800;
   letter-spacing:2px;text-align:center;background:#f1f5f8;border-radius:10px;padding:16px;margin:10px 0}
 
+
+/* 손이 필요한 학생 — 선생님 화면 오른쪽 맨 위 (2026-09-04)
+   평소에는 통째로 숨어 있다. 한 명이라도 걸릴 때만 그 자리에 나타나므로,
+   이 칸이 보인다는 것 자체가 "가 봐야 한다" 는 뜻이다. */
+.help-card{background:#fff1f0f2;border:2px solid #e05a4f;animation:help-breathe 1.8s ease-in-out infinite}
+.help-card h3{color:#c0392b;font-size:13px;margin-bottom:6px}
+.help-row{display:flex;align-items:baseline;gap:6px;padding:3px 0;border-top:1px dashed #f1c8c4}
+.help-row:first-child{border-top:0}
+.help-row b{font-size:14px}
+.help-row span{margin-left:auto;font-size:11px;color:#8a5a55;white-space:nowrap}
+.help-how{display:block;margin-top:7px;color:#8a5a55;font-size:11px;text-align:right}
+@keyframes help-breathe{50%{box-shadow:0 0 0 4px #e05a4f33,0 5px 18px #163b5855}}

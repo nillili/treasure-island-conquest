@@ -33,6 +33,8 @@ export interface PublicPlayer {
   name: string;
   team: Team;
   pos: number | null;
+  /** 마지막으로 문제를 푼 라운드. 한 번도 풀지 않았으면 0. 선생님 화면이 조용한 학생을 가리는 데 쓴다. */
+  lastRound: number;
 }
 
 export interface Scores {

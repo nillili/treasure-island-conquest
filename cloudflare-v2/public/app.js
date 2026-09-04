@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-01";
+const APP_BUILD = "2026-09-04";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -367,6 +367,52 @@ function turnMode(st) {
   return "next";
 }
 
+/**
+ * 지금 선생님이 손봐야 할 학생만 추린다.
+ *
+ * 두 가지다 — 접속이 끊긴 학생, 그리고 자기 차례가 몇 번 지나도록 한 문제도 못 푼 학생.
+ * 조치는 둘 다 같다. 가서 F5 로 다시 들어오게 한다.
+ *
+ * 라운드 차이를 3으로 잡은 이유: 폭풍(⛈️)은 한 턴만 쉬게 하므로 2까지는 멀쩡한 학생도 나온다.
+ * 서버가 판 끝에 남기는 stalled 판정과 같은 기준이라 화면과 기록이 어긋나지 않는다.
+ *
+ * 한 명도 안 붙어 있으면 접속은 따지지 않는다. 소켓이 막힌 교실에서는 수업 중인 학생도
+ * 전원 '끊김'으로 보이는데, 그때 반 전체를 부르라고 적으면 선생님이 이 칸을 안 믿게 된다.
+ */
+const QUIET_ROUNDS = 3;
+const OFFLINE_ROUNDS = 2; // 접속까지 끊겼으면 증거가 둘이라 조금 일찍 부른다
+
+function helpNeeded(st) {
+  if (!st || st.status !== "running") return [];
+  const online = new Set(st.presence || []);
+  const out = [];
+  for (const p of st.players) {
+    const behind = st.round - (p.lastRound || 0);
+    // 끊긴 것으로 보여도 방금 문제를 푼 학생은 부르지 않는다.
+    // 30초에 세 번 끊긴 화면은 스스로 폴링으로 내려가는데(net.js), 서버의 접속자 명단은
+    // WebSocket 만 세므로 멀쩡히 수업 중인 학생이 '끊김' 으로 보인다. 방화벽이 WebSocket 을
+    // 막는 교실에서 늘 일어나는 일이다. 푸는 사람을 불러 F5 를 시키면 수업을 방해할 뿐이다.
+    if (online.size && !online.has(p.id) && behind >= OFFLINE_ROUNDS) {
+      out.push({ id: p.id, name: p.name, team: p.team, why: "접속 끊김" });
+      continue;
+    }
+    if (behind >= QUIET_ROUNDS) {
+      out.push({ id: p.id, name: p.name, team: p.team, why: `${behind}라운드 동안 조용` });
+    }
+  }
+  return out;
+}
+
+function renderHelp() {
+  const list = helpNeeded(APP.state);
+  $("help-card").classList.toggle("hidden", list.length === 0);
+  if (!list.length) return;
+  $("help-count").textContent = `${list.length}명`;
+  $("help-list").innerHTML = list
+    .map((p) => `<div class="help-row"><b>${p.team === "H" ? "🔴" : "🟢"} ${esc(p.name)}</b><span>${esc(p.why)}</span></div>`)
+    .join("");
+}
+
 function renderAdmin() {
   const st = APP.state;
   if (!st) return;
@@ -391,6 +437,7 @@ function renderAdmin() {
   button.disabled = false; // 어떤 상황에서도 잠그지 않는다
   renderBoard("admin-board", true);
   renderLog("a-log");
+  renderHelp();
   renderFx();
 }
 

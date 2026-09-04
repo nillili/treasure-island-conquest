@@ -36,6 +36,11 @@ const IDLE_MS = 3 * 60 * 60 * 1000; // 마지막 활동 후 3시간이면 방을
 const TURN_DEBOUNCE_MS = 2000; // [다음 턴] 연타 방지
 const LOG_LIMIT = 30;
 
+/** last_played_turn_key("H:3") 에서 라운드만 뽑는다. 한 번도 풀지 않았으면 0. */
+function playedRound(key: string | null): number {
+  return Number(String(key ?? "").split(":")[1] ?? 0) || 0;
+}
+
 export interface InitArg {
   provisionId: string;
   code: string;
@@ -396,7 +401,13 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   private publicPlayers(): PublicPlayer[] {
-    return this.players().map((p) => ({ id: p.id, name: p.name, team: p.team, pos: p.pos }));
+    return this.players().map((p) => ({
+      id: p.id,
+      name: p.name,
+      team: p.team,
+      pos: p.pos,
+      lastRound: playedRound(p.last_played_turn_key),
+    }));
   }
 
   private lockMap(): Record<number, string> {
@@ -820,7 +831,7 @@ export class RoomDO extends DurableObject<Env> {
     // 화면이 멈췄거나 손을 놓은 것이다. 수업 중 watch.mjs 가 ⛔ 로 잡던 것을 기록에도 남긴다.
     const stalled = roster.filter((p) => {
       if (p.solved === 0) return false; // 위에서 이미 셌다
-      const round = Number(String(p.last_played_turn_key ?? "").split(":")[1] ?? 0);
+      const round = playedRound(p.last_played_turn_key);
       return round > 0 && room.round - round >= 3;
     }).length;
     if (stalled) {

@@ -223,7 +223,7 @@ function dashboard() {
   say(`\n[${clock(now)}] ${state.status} · R${state.round}/${state.roundLimit} · `
     + `${state.turnTeam === "H" ? "홍팀" : state.turnTeam === "C" ? "청팀" : "대기"} · 남은 ${Math.floor(left / 1000)}초 · `
     + `홍 ${state.scores.H.total} : 청 ${state.scores.C.total} · 접속 ${online.size}/${state.players.length}`);
-  say(`  ${pad("이름", 11)}${pad("팀", 4)}${pad("위치", 6)}${pad("도전가능", 9)}${pad("마지막", 9)}상태`);
+  say(`  ${pad("이름", 11)}${pad("팀", 4)}${pad("위치", 6)}${pad("도전가능", 9)}${pad("마지막", 9)}${pad("밀림", 6)}상태`);
 
   const alarms = [];
   for (const p of [...state.players].sort((a, b) => a.name.localeCompare(b.name, "ko"))) {
@@ -232,15 +232,24 @@ function dashboard() {
     const last = seen.get(p.id) ?? 0;
     const q = quiet.get(p.id) ?? 0;
 
+    // 마지막으로 푼 라운드가 지금보다 얼마나 뒤인가. 서버가 그 값을 함께 보내 준다.
+    const behind = state.round - (p.lastRound ?? 0);
+    // 선생님 화면 오른쪽 위 "도와줄 학생" 칸과 똑같은 기준(app.js 의 helpNeeded).
+    // 로그만 보고 "그 순간 화면에 누가 떠 있었나" 를 되짚을 수 있어야, 나중에
+    // 화면이 옳게 불렀는지 엉뚱한 학생을 불렀는지 대조할 수 있다.
+    const onScreen = state.status === "running"
+      && ((online.size && !online.has(p.id) && behind >= 2) || behind >= 3);
+
     let status = "정상";
     if (state.status !== "running") status = "· 대기/종료";
     else if (!online.has(p.id)) status = "· 접속 끊김";
     else if (p.pos !== null && free === 0) { status = "⚠ 도전할 칸 없음"; alarms.push([p.name, "[다음 턴]을 누르면 자동으로 옮겨 줍니다"]); }
     else if (q >= 2) { status = `⛔ 자기 팀 턴 ${q}회 조용함`; alarms.push([p.name, "나갔다 다시 들어오게 하세요(F5 → 이름 재입력)"]); }
     else if (q === 1) status = "⚠ 직전 턴에 조용했음";
+    if (onScreen) status = `🙋 ${status}`;
 
     say(`  ${pad(p.name, 11)}${pad(p.team === "H" ? "홍" : "청", 4)}${pad(label(p.pos, state.cols), 6)}`
-      + `${pad(free, 9)}${pad(last ? ago(now - last) : "없음", 9)}${status}`);
+      + `${pad(free, 9)}${pad(last ? ago(now - last) : "없음", 9)}${pad(behind, 6)}${status}`);
   }
   for (const [name, how] of alarms) say(`  >>> ${name}: ${how}`);
 }
