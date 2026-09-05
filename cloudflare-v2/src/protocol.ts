@@ -35,6 +35,11 @@ export interface PublicPlayer {
   pos: number | null;
   /** 마지막으로 문제를 푼 라운드. 한 번도 풀지 않았으면 0. 선생님 화면이 조용한 학생을 가리는 데 쓴다. */
   lastRound: number;
+  /**
+   * 짝을 맞추려고 넣은 가상의 학생("깍두기")인가.
+   * 화면은 이 값으로 🤖 를 붙이고, 접속이 끊긴 것으로 오해해 부르지 않는다.
+   */
+  bot: boolean;
 }
 
 export interface Scores {

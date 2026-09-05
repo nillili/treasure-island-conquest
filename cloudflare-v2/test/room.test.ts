@@ -17,8 +17,8 @@ interface StateMsg {
   turnEndsAt: number | null;
   quizTitle: string;
   board: { t: string; o: string | null }[];
-  players: { id: string; name: string; team: "H" | "C"; pos: number | null; lastRound: number }[];
-  scores: { H: { total: number; bonus: number }; C: { total: number; bonus: number } };
+  players: { id: string; name: string; team: "H" | "C"; pos: number | null; lastRound: number; bot: boolean }[];
+  scores: { H: { total: number; bonus: number; territory: number }; C: { total: number; bonus: number; territory: number } };
   cellLocks: Record<string, string>;
   myPlayer: { id: string; team: "H" | "C"; pos: number; playedThisTurn: boolean } | null;
   iAmTrapped: boolean;
@@ -316,7 +316,7 @@ describe("게임 결과", () => {
     const out = await teacherCmd("end");
     const r = out.reply as {
       t: string; winner: string; rounds: number; quizTitle: string;
-      scores: { H: { total: number; bonus: number }; C: { total: number; bonus: number } };
+      scores: { H: { total: number; bonus: number; territory: number }; C: { total: number; bonus: number; territory: number } };
       players: { name: string; team: string; solved: number; correct: number }[];
     };
     expect(r.t).toBe("gameover");
@@ -451,7 +451,8 @@ describe("선생님 명령", () => {
 
     const state = await myState(me.myPlayer!.id);
     expect(state.status).toBe("ended");
-    expect(state.players).toHaveLength(1);
+    // 혼자면 [시작] 때 깍두기가 짝으로 들어온다(2026-09-05). 사람이 그대로 있는지만 본다.
+    expect(state.players.filter((p) => !p.bot)).toHaveLength(1);
   });
 
   it("초기화는 명단까지 비운다", async () => {
@@ -1038,6 +1039,198 @@ describe("갇히면 한 판 쉰다 (2026-09-01 규칙 · 2026-09-04 뜻 좁힘)"
     expect(back.turnTeam).toBe(me.team);
     expect(back.iAmTrapped).toBe(false);
     expect(back.myPlayer!.pos).not.toBe(me.pos); // 빈자리로 옮겨졌다
+  });
+});
+
+describe("깍두기 — 짝이 안 맞으면 가상의 학생이 들어온다 (2026-09-05)", () => {
+  const stub = () => env.ROOM.getByName(roomCode);
+  const bots = (s: StateMsg) => s.players.filter((p) => p.bot);
+  const humans = (s: StateMsg) => s.players.filter((p) => !p.bot);
+
+  /** 시간을 앞으로 돌려 알람으로 턴을 넘긴다. [다음 턴] 명령은 2초 연타 방지에 걸린다. */
+  async function passTurn() {
+    await runInDurableObject(stub(), (_i, state) => {
+      state.storage.sql.exec("UPDATE room SET turn_ends_at = ? WHERE id = 1", Date.now() - 10_000);
+    });
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+  }
+
+  /** 홀수 명을 넣고 [시작]까지 한다. 그 순간 깍두기가 들어온다. */
+  async function oddGame(names = ["민수", "영희", "철수"]) {
+    const ids: string[] = [];
+    for (const n of names) ids.push((await join(n)).myPlayer!.id);
+    await teacherCmd("newgame");
+    await teacherCmd("next");
+    return { ids, state: await myState(ids[0]!) };
+  }
+
+  it("홀수면 [시작] 때 깍두기가 모자란 팀에 들어와 짝을 맞춘다", async () => {
+    const { state } = await oddGame();
+    expect(humans(state)).toHaveLength(3);
+    expect(bots(state)).toHaveLength(1);
+    expect(bots(state)[0]!.name).toBe("깍두기");
+
+    const h = state.players.filter((p) => p.team === "H").length;
+    expect(h).toBe(state.players.length - h); // 짝이 맞았다
+  });
+
+  it("깍두기도 판 위에 자리를 잡는다", async () => {
+    const { state } = await oddGame();
+    expect(bots(state)[0]!.pos).not.toBeNull();
+  });
+
+  it("다섯 명이어도 깍두기는 한 명뿐이다", async () => {
+    const { state } = await oddGame(["민수", "영희", "철수", "지혜", "동현"]);
+    expect(humans(state)).toHaveLength(5);
+    expect(bots(state)).toHaveLength(1);
+    const h = state.players.filter((p) => p.team === "H").length;
+    expect(h).toBe(state.players.length - h);
+  });
+
+  // 강퇴로 차이가 둘 이상 벌어지면 한 명을 넣어도 짝이 안 맞는다. 그럴 땐 넣지 않고
+  // 점수 보정(handicap)에 맡긴다 — 뜻 없는 말이 판에 하나 더 서 있을 뿐이기 때문이다.
+  it("차이가 둘 이상이면 깍두기를 넣지 않는다", async () => {
+    const ids: string[] = [];
+    for (const n of ["민수", "영희", "철수", "지혜", "동현", "서준"]) {
+      ids.push((await join(n)).myPlayer!.id);
+    }
+    await teacherCmd("newgame");
+
+    // 3:3 에서 한 팀의 두 명을 뺀다 → 3:1. 한 명을 넣어도 짝이 안 맞는 자리다.
+    let s = await myState(ids[0]!);
+    const victims = s.players.filter((p) => p.team === "C").slice(0, 2);
+    for (const v of victims) await teacherCmd("kick", { playerId: v.id });
+
+    await teacherCmd("next");
+    const alive = ids.find((id) => !victims.some((v) => v.id === id))!;
+    s = await myState(alive);
+    const hh = s.players.filter((p) => p.team === "H").length;
+    expect(Math.abs(hh - (s.players.length - hh))).toBe(2);
+    expect(bots(s)).toHaveLength(0);
+  });
+
+  it("짝수면 깍두기가 들어오지 않는다", async () => {
+    const state = await startGame(); // 둘이라 이미 짝이 맞는다
+    expect(bots(state)).toHaveLength(0);
+  });
+
+  it("학생이 '깍두기' 라고 적어 두었으면 이름이 겹치지 않는다", async () => {
+    const { state } = await oddGame(["깍두기", "영희", "철수"]);
+    const names = state.players.map((p) => p.name).sort();
+    expect(new Set(names).size).toBe(names.length); // 이름이 하나도 안 겹친다
+    expect(bots(state)[0]!.name).toBe("깍두기2");
+  });
+
+  it("깍두기가 들어가면 홀수 보정 점수가 0 이 된다 — 두 번 세지 않는다", async () => {
+    const { state } = await oddGame();
+    expect(state.scores.H.bonus).toBe(0);
+    expect(state.scores.C.bonus).toBe(0);
+  });
+
+  it("자기 차례가 오면 문제를 푼다", async () => {
+    const { ids } = await oddGame();
+    const bot = bots(await myState(ids[0]!))[0]!;
+
+    // 깍두기 팀 차례가 두 번 지나가게 한다
+    for (let i = 0; i < 4; i++) await passTurn();
+
+    const after = await myState(ids[0]!);
+    const me = after.players.find((p) => p.id === bot.id)!;
+    expect(me.lastRound).toBeGreaterThan(0); // 실제로 답을 냈다
+  });
+
+  it("정답률이 100% 면 반드시 땅을 먹고 움직인다", async () => {
+    const { ids } = await oddGame();
+    let s = await myState(ids[0]!);
+
+    // 사람 한 명이 한 문제를 맞혀 전체 정답률을 1.0 으로 만든다.
+    // 깍두기는 이 값을 그대로 쓰므로, 그다음 차례에는 확정적으로 성공한다.
+    const turnHuman = humans(s).find((p) => p.team === s.turnTeam)!;
+    const mine = await myState(turnHuman.id);
+    const cell = pickableCell(mine);
+    await rpc({ t: "pick", cell, actionId: "p1", playerId: turnHuman.id });
+    const quiz = (await rpc({ t: "peek", cell }, teacherCookie)).reply as { ans: number };
+    const graded = await rpc({ t: "answer", cell, choice: quiz.ans, actionId: "a1", playerId: turnHuman.id });
+    expect((graded.reply as { correct: boolean }).correct).toBe(true); // 정답률이 1.0 이 됐다
+
+    s = await myState(ids[0]!);
+    const bot = bots(s)[0]!;
+    const before = s.scores[bot.team].territory;
+
+    for (let i = 0; i < 4; i++) await passTurn(); // 깍두기 차례가 오게 한다
+
+    const after = await myState(ids[0]!);
+    const me = after.players.find((p) => p.id === bot.id)!;
+    expect(after.scores[bot.team].territory).toBeGreaterThan(before); // 땅이 늘었다
+    expect(me.pos).not.toBe(bot.pos); // 움직였다
+  });
+
+  // 2026-09-05 로컬 시연에서 깍두기가 "유령처럼" 땅을 안 칠하고 지나갔다.
+  // 원인: 깍두기의 칸 변경을 rev 를 올리기 전에 patch 로 보내서, 화면이 "이미 본 번호" 라며
+  // 조용히 버렸다. 학생 화면은 턴마다 sync 를 해서 저절로 고쳐졌지만 선생님 화면은 아니었다.
+  // 그래서 이 테스트는 폴링(sync)이 아니라 **진짜 WebSocket 방송**을 받아서 확인한다.
+  it("깍두기가 먹은 땅이 턴 방송에 실려 온다 — 버려질 수 없는 순번으로", async () => {
+    const { ids } = await oddGame();
+    let s = await myState(ids[0]!);
+
+    // 사람 하나가 정답을 내 전체 정답률을 1.0 으로 — 깍두기의 다음 수가 확정된다
+    const turnHuman = humans(s).find((p) => p.team === s.turnTeam)!;
+    const mine = await myState(turnHuman.id);
+    const cell = pickableCell(mine);
+    await rpc({ t: "pick", cell, actionId: "wp1", playerId: turnHuman.id });
+    const quiz = (await rpc({ t: "peek", cell }, teacherCookie)).reply as { ans: number };
+    await rpc({ t: "answer", cell, choice: quiz.ans, actionId: "wa1", playerId: turnHuman.id });
+
+    s = await myState(ids[0]!);
+    const bot = bots(s)[0]!;
+
+    // 선생님 화면처럼 WebSocket 으로 붙어 방송만 받는다 (sync 로 스스로 고치지 않는다)
+    const res = await SELF.fetch(`${BASE}/api/rooms/${roomCode}/ws`, {
+      headers: { Upgrade: "websocket" },
+    });
+    const ws = res.webSocket!;
+    ws.accept();
+    const inbox: { t: string; stateRev?: number; cells?: { idx: number; o: string | null }[] }[] = [];
+    ws.addEventListener("message", (ev) => {
+      if (ev.data === "PONG") return;
+      inbox.push(JSON.parse(ev.data as string));
+    });
+    ws.send(JSON.stringify({ t: "hello", role: "student", playerId: ids[0] }));
+
+    const until = async (check: () => boolean) => {
+      for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 20));
+      expect(check()).toBe(true);
+    };
+    await until(() => inbox.some((m) => m.t === "state"));
+    let rev = inbox.find((m) => m.t === "state")!.stateRev!;
+
+    // 깍두기 팀 차례가 두 번 지나가게 한다
+    for (let i = 0; i < 4; i++) await passTurn();
+    await until(() => inbox.filter((m) => m.t === "turn").length >= 4);
+
+    // 순번이 튀지 않았다 — 하나라도 rev+1 을 건너뛰면 화면은 sync 를 강제당한다
+    for (const m of inbox) {
+      if (m.stateRev === undefined || m.t === "state") continue;
+      expect(m.stateRev).toBeLessThanOrEqual(rev + 1);
+      if (m.stateRev === rev + 1) rev = m.stateRev;
+    }
+
+    // 깍두기 팀 차례의 턴 방송에 깍두기가 칠한 칸이 실려 있다
+    const carried = inbox.filter(
+      (m) => m.t === "turn" && (m.cells ?? []).some((c) => c.o === bot.team),
+    );
+    expect(carried.length).toBeGreaterThan(0);
+    ws.close();
+  });
+
+  it("[새 게임]을 하면 지난 판의 깍두기가 사라진다", async () => {
+    const { ids } = await oddGame();
+    expect(bots(await myState(ids[0]!))).toHaveLength(1);
+
+    await teacherCmd("newgame");
+    const after = await myState(ids[0]!);
+    expect(bots(after)).toHaveLength(0); // [시작]을 다시 눌러야 들어온다
+    expect(humans(after)).toHaveLength(3);
   });
 });
 

@@ -417,6 +417,20 @@ export function trappedPlayers(view: PlacementView, team: Team): string[] {
   return out;
 }
 
+/**
+ * 깍두기가 둘 칸 하나. 이웃 8칸 중 **임자 없고 아무도 안 잠근 칸**에서 무작위로 고른다.
+ * 학생이 고를 수 있는 범위와 똑같다 — 가상의 사람이라고 더 넓게 보지 않는다.
+ */
+export function botPickCell(
+  view: PlacementView,
+  pos: number,
+  locked: Set<number>,
+): number | null {
+  const free = neighbors8(pos, view.rows, view.cols)
+    .filter((n) => view.owners[n] === null && !locked.has(n));
+  return free.length ? free[Math.floor(Math.random() * free.length)]! : null;
+}
+
 /** 공격칸: 빼앗을 상대 칸 하나를 무작위로 고른다. 없으면 null. */
 export function pickStealTarget(owners: Owner[], team: Team): number | null {
   const enemy: Team = team === "H" ? "C" : "H";

@@ -78,6 +78,7 @@ class Client {
       this.state.scores = msg.scores;
       this.state.status = msg.status;
     } else if (msg.t === "turn" && this.state) {
+      for (const c of msg.cells ?? []) this.state.board[c.idx] = { t: c.t, o: c.o };
       Object.assign(this.state, {
         status: msg.status, round: msg.round, turnTeam: msg.turnTeam,
         turnEndsAt: msg.turnEndsAt, players: msg.players, cellLocks: msg.cellLocks,

@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-04b";
+const APP_BUILD = "2026-09-05b";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -387,6 +387,8 @@ function helpNeeded(st) {
   const online = new Set(st.presence || []);
   const out = [];
   for (const p of st.players) {
+    // 깍두기는 사람이 아니다. 소켓이 없어 늘 끊긴 것으로 보이지만 부를 일이 없다.
+    if (p.bot) continue;
     const behind = st.round - (p.lastRound || 0);
     // 끊긴 것으로 보여도 방금 문제를 푼 학생은 부르지 않는다.
     // 30초에 세 번 끊긴 화면은 스스로 폴링으로 내려가는데(net.js), 서버의 접속자 명단은
@@ -427,9 +429,13 @@ function renderAdmin() {
   $("a-sub-c").textContent = `영토 ${st.scores.C.territory} + 보너스 ${st.scores.C.bonus}`;
 
   const online = new Set(st.presence || []);
-  $("online-count").textContent = `${st.players.length}명 · 접속 ${online.size}명`;
+  // 사람 수만 센다. 깍두기는 짝을 맞추러 들어온 가상의 학생이라 "몇 명 왔나" 에 넣지 않는다.
+  const humans = st.players.filter((p) => !p.bot);
+  $("online-count").textContent = `${humans.length}명 · 접속 ${online.size}명`;
   $("roster").innerHTML = st.players
-    .map((p) => `<span class="person ${online.has(p.id) ? "" : "off"}">${p.team === "H" ? "🔴" : "🟢"} ${esc(p.name)}<button class="kick" data-kick="${p.id}" title="내보내기">×</button></span>`)
+    .map((p) => p.bot
+      ? `<span class="person bot" title="짝을 맞추려고 들어온 가상의 학생입니다">🤖 ${esc(p.name)}</span>`
+      : `<span class="person ${online.has(p.id) ? "" : "off"}">${p.team === "H" ? "🔴" : "🟢"} ${esc(p.name)}<button class="kick" data-kick="${p.id}" title="내보내기">×</button></span>`)
     .join("");
 
   const button = $("turn-button");
@@ -532,6 +538,8 @@ function onMessage(msg) {
     }
     case "turn": {
       if (!APP.state || !acceptRev(msg)) return;
+      // 턴이 열리면서 이미 바뀐 칸 — 깍두기가 먹은 땅과 새로 선 자리부터 칠한다
+      for (const c of msg.cells || []) APP.state.board[c.idx] = { t: c.t, o: c.o };
       Object.assign(APP.state, {
         status: msg.status, round: msg.round, turnTeam: msg.turnTeam,
         turnEndsAt: msg.turnEndsAt, players: msg.players, cellLocks: msg.cellLocks,
@@ -947,17 +955,22 @@ const selectedSetId = () => {
 //
 //     끝났을 때 채워진 칸 = 인원 + 총정답수 = 인원 × (1 + 판수 × CLAIM)
 //
-// D1 게임 기록 16판으로 확인했다 — CLAIM 중앙값 0.65, 최저 0.50, 최고 0.89.
-const CLAIM = 0.65;
+// D1 게임 기록으로 확인했다. 처음에는 전체 20판 중앙값 0.65 를 썼는데, 그 값은 학생 넷으로
+// 돌린 시험 판(0.50~0.62)이 끌어내린 것이었다. **실제 수업 규모(7명 이상) 10판만 보면 0.73** 이다.
+//   0.52 0.56 0.70 0.70 0.73 0.73 0.76 0.84 0.86 0.89   (2026-09-05 기준)
+// 0.65 로는 판을 크게 잡아 9/5 수업에서 7명 판이 12×12 에 40% 밖에 안 찼다. 헐렁하면
+// 영역이 안 맞닿아 서로 가두는 수가 아예 나오지 않는다.
+const CLAIM = 0.73;
 
 // 9명 · 10판 · 12×12 가 정확히 절반(72/144)이었고, 그 판이 좋았다.
 // 절반이 차야 영역끼리 맞닿아 서로 가둘 수 있고, 절반이 남아야 처음부터 갇히는 학생이 없다.
 const FILL_AIM = 0.50;
 
 // 판이 마르기 시작하는 선. 처음에는 55% 로 잡았는데 30명이 4판밖에 못 하게 나왔다.
-// 4판은 수업이 아니다. 그래서 상한을 60% 로 올리고 판수에 하한을 뒀다 — 30명 6판(65%),
-// 23명 7판(57%). 사람이 많을수록 판이 빽빽해지지만, 그래야 게임다운 길이가 나온다.
-const FILL_MAX = 0.60;
+// 4판은 수업이 아니다. 그래서 상한을 올리고 판수에 하한을 뒀다 — 23명 7판, 30명 6판.
+// CLAIM 을 0.73 으로 올리면서 이 값도 0.60 → 0.65 로 함께 올렸다. 안 올리면 23명이 6판으로
+// 밀려 못 박아 둔 값이 깨진다. 사람이 많을수록 판이 빽빽해지지만 그래야 게임다운 길이가 나온다.
+const FILL_MAX = 0.65;
 const ROUNDS_MIN = 6; // 아무리 사람이 많아도 이보다 짧게는 줄이지 않는다
 const SIDE_MIN = 10;   // game.ts 의 MIN_SIDE
 const SIDE_MAX = 15;   // game.ts 의 MAX_SIDE

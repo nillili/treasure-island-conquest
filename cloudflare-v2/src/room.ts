@@ -6,11 +6,13 @@ import {
   type PlacementView,
   type Team,
   assignRandomPositions,
+  botPickCell,
   buildBoard,
   maxPlayers,
   minSideFor,
   neighbors8,
   nextTurn,
+  pickStealTarget,
   placeLatePlayer,
   rescueTrapped,
   trappedPlayers,
@@ -35,6 +37,23 @@ import { SCHEMA } from "./schema";
 const IDLE_MS = 3 * 60 * 60 * 1000; // 마지막 활동 후 3시간이면 방을 닫는다
 const TURN_DEBOUNCE_MS = 2000; // [다음 턴] 연타 방지
 const LOG_LIMIT = 30;
+
+/**
+ * 짝을 맞추려고 넣는 가상의 학생.
+ *
+ * 예전에는 인원이 홀수면 모자란 팀에 점수를 얹어 줬다(handicap). 숫자만 늘어나니 학생들은
+ * 그 점수가 어디서 왔는지 몰랐다. 이제는 깍두기가 판 위에 실제로 서서 문제를 풀고 땅을 먹는다.
+ * 깍두기가 들어가면 양 팀 인원이 같아지므로 handicap 은 저절로 0 이 된다 — 두 번 세지 않는다.
+ */
+const BOT_PREFIX = "bot_";
+const BOT_NAME = "깍두기";
+/** 아직 아무도 안 푼 첫 턴에 쓸 정답률. 실측 20판의 전체 정답률 중앙값이다. */
+const BOT_FALLBACK_RATE = 0.75;
+
+/** 이 id 가 가상의 학생인가. 이름이 아니라 id 로 가린다 — 학생이 "깍두기" 라고 적을 수 있다. */
+function isBot(id: string): boolean {
+  return id.startsWith(BOT_PREFIX);
+}
 
 /** last_played_turn_key("H:3") 에서 라운드만 뽑는다. 한 번도 풀지 않았으면 0. */
 function playedRound(key: string | null): number {
@@ -209,6 +228,10 @@ export class RoomDO extends DurableObject<Env> {
    * 학생이 암산으로 따라올 수 있어야 해서 반올림하지 않는다.
    */
   private handicap(room: RoomRow): { H: number; C: number } {
+    // 2026-09-05 부터 [시작] 때 깍두기가 들어가 짝을 맞추므로, 보통은 h === c 가 되어
+    // 이 함수는 0 을 돌려준다. 깍두기가 판 위에서 실제로 먹은 땅이 그 몫을 대신한다.
+    // 두 번 세지 않으려고 여기를 지우지는 않았다 — 게임 도중에 학생이 들어와 짝이 다시
+    // 어긋나는 경우(깍두기는 판 중간에 늘지 않는다)에는 이 보정이 아직 필요하다.
     const roster = this.players();
     const h = roster.filter((p) => p.team === "H").length;
     const c = roster.length - h;
@@ -407,6 +430,7 @@ export class RoomDO extends DurableObject<Env> {
       team: p.team,
       pos: p.pos,
       lastRound: playedRound(p.last_played_turn_key),
+      bot: isBot(p.id),
     }));
   }
 
@@ -480,8 +504,9 @@ export class RoomDO extends DurableObject<Env> {
     };
   }
 
-  private turnMessage(): unknown {
+  private turnMessage(changedCells: number[] = []): unknown {
     const room = this.needRoom();
+    const set = new Set(changedCells);
     return {
       t: "turn",
       stateRev: room.rev,
@@ -490,6 +515,11 @@ export class RoomDO extends DurableObject<Env> {
       round: room.round,
       turnTeam: room.turn_team,
       turnEndsAt: room.turn_ends_at,
+      // 턴이 열리면서 이미 바뀐 칸 — 깍두기가 먹은 땅과 새로 선 자리.
+      // patch 로 따로 보내면 순번이 어긋나 버려지므로 이 메시지에 같은 순번으로 싣는다.
+      cells: this.cells()
+        .filter((c) => set.has(c.idx))
+        .map((c) => ({ idx: c.idx, o: c.owner, t: c.owner ? c.type : "?" })),
       players: this.publicPlayers(),
       cellLocks: this.lockMap(),
       // 학생에게도 그냥 간다. 이 메시지는 한 번 만들어 전원에게 뿌리는 구조라 선생님만 골라
@@ -686,7 +716,7 @@ export class RoomDO extends DurableObject<Env> {
       try {
         const out = this.advanceTurn();
         if (out.ended) this.broadcastState();
-        else this.broadcast(this.turnMessage());
+        else this.broadcast(this.turnMessage(out.cells));
       } catch (err) {
         this.addEvent("error", null, null, { where: "alarm", msg: String(err) });
       }
@@ -733,7 +763,7 @@ export class RoomDO extends DurableObject<Env> {
     this.sql.exec("UPDATE players SET attempt_cell = NULL, attempt_started_at = NULL");
   }
 
-  private advanceTurn(): { ended: boolean } {
+  private advanceTurn(): { ended: boolean; cells: number[] } {
     const room = this.needRoom();
     if (!this.cells().length) throw new Refused(E.notRunning, "새 게임을 먼저 눌러 주세요.");
     if (room.status === "ended") throw new Refused(E.notRunning, "이미 끝난 게임입니다.");
@@ -743,10 +773,17 @@ export class RoomDO extends DurableObject<Env> {
 
     this.captureFx(); // last_turn_at 이 덮어써지기 전에 이번 턴을 갈무리한다
     this.clearAttempts();
+
+    // [시작]을 누른 순간에만 짝을 맞춘다(그때는 turn_team 이 아직 없다).
+    // 판이 도는 중에는 인원이 바뀌어도 건드리지 않는다 — 도중에 깍두기가 사라지면
+    // 그 땅의 임자가 없어지고, 새로 생기면 갑자기 낯선 말이 판에 나타난다.
+    const changedCells: number[] = [];
+    if (!room.turn_team) changedCells.push(...this.fillTeams());
+
     const next = nextTurn(room.turn_team, room.round);
     if (next.round > room.round_limit) {
       this.broadcast(this.endGame());
-      return { ended: true };
+      return { ended: true, cells: [] };
     }
 
     const key = turnKey(next.turnTeam, next.round);
@@ -783,14 +820,131 @@ export class RoomDO extends DurableObject<Env> {
     }
 
     rescueTrapped(view, next.turnTeam, new Set(nowTrapped));
-    this.applyPlacement(view, before);
+    changedCells.push(...this.applyPlacement(view, before).cells);
 
     this.sql.exec(
       `UPDATE room SET status = 'running', turn_team = ?, round = ?, turn_ends_at = ?, last_turn_at = ? WHERE id = 1`,
       next.turnTeam, next.round, Date.now() + room.turn_seconds * 1000, Date.now(),
     );
+
+    // 깍두기는 자기 차례가 열리자마자 둔다. 학생들이 판을 보는 순간 이미 움직여 있어야
+    // "누가 저기를 먹었지" 를 묻지 않는다. 폭풍·갇힘은 위에서 이미 정리됐다.
+    changedCells.push(...this.playBots(next.turnTeam, next.round));
+
     this.bump();
-    return { ended: false };
+    // 바뀐 칸은 여기서 방송하지 않고 턴 메시지에 실어 보낸다. 순번(rev)을 올리기 전에
+    // patch 로 따로 보내면 화면이 "이미 본 번호" 라며 조용히 버린다 — 깍두기가 먹은 땅이
+    // 색칠되지 않고 유령처럼 지나가는 것으로 보였다(2026-09-05 로컬 시연에서 발견).
+    return { ended: false, cells: [...new Set(changedCells)] };
+  }
+
+  /**
+   * 인원이 홀수면 모자란 쪽에 가상의 학생 "깍두기" 를 **한 명만** 넣어 짝을 맞춘다.
+   *
+   * 한 명뿐이다. 깍두기는 숫자를 맞추려고 들어오는 것이라 둘 이상은 뜻이 없다.
+   * 입장할 때 적은 팀으로 자동 배정되므로(join) 차이는 늘 0 아니면 1 이다.
+   * 강퇴 등으로 차이가 둘 이상 벌어진 드문 경우에는 넣지 않고, 점수 보정(handicap)에 맡긴다 —
+   * 한 명을 넣어도 어차피 짝이 안 맞아서, 넣으나 마나 한 말이 판에 하나 더 서 있게 될 뿐이다.
+   */
+  private fillTeams(): number[] {
+    const roster = this.players();
+    const h = roster.filter((p) => p.team === "H").length;
+    const c = roster.length - h;
+    if (Math.abs(h - c) !== 1) return [];
+
+    // 학생이 "깍두기" 라고 적어 두었을 수 있다. name 은 UNIQUE 라 겹치면 INSERT 가 죽는다.
+    const used = new Set(roster.map((p) => p.name));
+    let name = BOT_NAME;
+    for (let n = 2; used.has(name); n++) name = `${BOT_NAME}${n}`;
+
+    const id = `${BOT_PREFIX}${Date.now().toString(36)}`;
+    const now = Date.now();
+    this.sql.exec(
+      "INSERT INTO players (id, name, team, joined_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+      id, name, h < c ? "H" : "C", now, now,
+    );
+
+    // 판이 이미 깔려 있으면 자리를 잡아 준다. 늦게 들어온 학생과 같은 규칙을 쓴다.
+    // 시작 칸이 팀 색으로 칠해지므로, 그 칸도 바뀐 칸으로 돌려줘야 화면에 색이 간다.
+    if (this.cells().length) {
+      const view = this.placementView(this.needRoom());
+      const before = this.snapshotView(view);
+      placeLatePlayer(view, id);
+      return this.applyPlacement(view, before).cells;
+    }
+    return [];
+  }
+
+  /**
+   * 실제 학생들의 전체 정답률. **깍두기 자신은 빼고 센다** —
+   * 넣으면 자기 성적이 자기 확률을 다시 정하는 되먹임이 생긴다.
+   */
+  private answerRate(): number {
+    const t = this.sql
+      .exec<{ solved: number; correct: number }>(
+        `SELECT COALESCE(SUM(solved),0) AS solved, COALESCE(SUM(correct),0) AS correct
+           FROM players WHERE id NOT LIKE ?`,
+        `${BOT_PREFIX}%`,
+      )
+      .one();
+    return t.solved ? t.correct / t.solved : BOT_FALLBACK_RATE;
+  }
+
+  /**
+   * 깍두기가 자기 차례에 한 수씩 둔다. 학생과 똑같은 규칙을 지난다 —
+   * 이웃 빈 칸 하나를 골라, 실제 학생들의 평균 정답률만큼 맞힌다.
+   * 맞히면 땅을 먹고 움직이며 보물·폭풍·공격도 그대로 겪는다.
+   */
+  private playBots(turnTeam: Team, round: number): number[] {
+    const key = turnKey(turnTeam, round);
+    const bots = this.players().filter((p) => isBot(p.id) && p.team === turnTeam && p.pos !== null);
+    if (!bots.length) return [];
+
+    const rate = this.answerRate();
+    const changed: number[] = [];
+
+    for (const me of bots) {
+      if (me.skip_turn_key === key) continue; // ⛈️ 폭풍으로 쉰다
+      if (this.isTrapped(me.id, key)) continue; // 🚧 갇혀서 쉰다
+
+      const view = this.placementView(this.needRoom());
+      const cell = botPickCell(view, me.pos!, new Set(Object.keys(this.lockMap()).map(Number)));
+      if (cell === null) continue; // 둘레가 다 찼다. 다음 턴에 rescueTrapped 가 꺼내 준다.
+
+      const target = this.sql.exec<CellRow>("SELECT * FROM cells WHERE idx = ?", cell).toArray()[0];
+      if (!target) continue;
+
+      const correct = Math.random() < rate;
+      let bonus = 0;
+      let stolen: number | null = null;
+
+      if (correct) {
+        const won = this.claimCell(me, cell, target);
+        bonus = won.bonus;
+        // 깍두기는 손가락으로 고를 수 없다. 권리를 받았으면 그 자리에서 무작위로 하나 가져온다.
+        if (won.stealGranted) {
+          this.sql.exec("DELETE FROM steals WHERE player_id = ?", me.id);
+          stolen = pickStealTarget(this.cells().map((x) => x.owner), me.team);
+          if (stolen !== null) {
+            this.sql.exec("UPDATE cells SET owner = ?, owned_by = NULL WHERE idx = ?", me.team, stolen);
+            changed.push(stolen);
+          }
+        }
+      }
+
+      this.sql.exec("UPDATE cells SET tried = tried + 1 WHERE idx = ?", cell);
+      this.sql.exec(
+        `UPDATE players SET solved = solved + 1, correct = correct + ?, last_played_turn_key = ?
+           WHERE id = ?`,
+        correct ? 1 : 0, key, me.id,
+      );
+      this.addEvent("answer", me.id, cell, {
+        at: Date.now(), name: me.name, team: me.team, cell,
+        ok: correct, gain: correct ? 1 + bonus : 0, type: target.type, bonus, stolen,
+      } satisfies LogEntry);
+      changed.push(cell);
+    }
+    return changed;
   }
 
   /**
@@ -800,8 +954,11 @@ export class RoomDO extends DurableObject<Env> {
    * 누가 멈췄는지는 수업 중에 watch.mjs 가 실시간으로 알려 주는 몫이고,
    * 여기 남는 것은 나중에 "그날 뭔가 이상했나" 를 되짚기 위한 표시다.
    */
-  private gameIssues(room: RoomRow, roster: PlayerRow[]): GameIssue[] {
+  private gameIssues(room: RoomRow, allPlayers: PlayerRow[]): GameIssue[] {
     const issues: GameIssue[] = [];
+    // 깍두기는 소켓이 없어 언제나 '끊김' 으로 보이고, 화면이 굳은 것도 아니다.
+    // 여기 섞으면 판마다 없는 경고가 하나씩 붙어 진짜 신호가 묻힌다.
+    const roster = allPlayers.filter((p) => !isBot(p.id));
 
     const errors = this.sql
       .exec<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE kind = 'error'")
@@ -866,8 +1023,12 @@ export class RoomDO extends DurableObject<Env> {
 
     const startedAt = Number.parseInt(gameKey.slice(2), 36) || room.created_at;
     const issues = this.gameIssues(room, roster);
-    const solved = roster.reduce((n, p) => n + p.solved, 0);
-    const correct = roster.reduce((n, p) => n + p.correct, 0);
+    // 인원·시도·정답은 **실제 학생만** 센다. 점수(h_total·c_total)에는 깍두기가 먹은 땅이
+    // 들어가지만, 이 세 숫자는 "몇 명이 몇 문제를 풀었나" 를 묻는 것이라 사람만 세야 한다.
+    // 판 크기를 정하는 계수(CLAIM)도 이 값에서 나오므로 섞이면 판 설계가 틀어진다.
+    const humans = roster.filter((p) => !isBot(p.id));
+    const solved = humans.reduce((n, p) => n + p.solved, 0);
+    const correct = humans.reduce((n, p) => n + p.correct, 0);
 
     this.ctx.waitUntil(
       this.env.DB.prepare(
@@ -879,7 +1040,7 @@ export class RoomDO extends DurableObject<Env> {
         .bind(
           room.code, gameKey, room.teacher_id, room.label, room.quiz_title, startedAt, Date.now(),
           room.round, room.round_limit, scores.H.total, scores.C.total, winner,
-          roster.length, solved, correct, JSON.stringify(issues),
+          humans.length, solved, correct, JSON.stringify(issues),
         )
         .run()
         .then(() => undefined)
@@ -940,6 +1101,9 @@ export class RoomDO extends DurableObject<Env> {
   private newGame(clearPlayers: boolean): void {
     const room = this.needRoom();
     if (clearPlayers) this.sql.exec("DELETE FROM players");
+    // 지난 판의 깍두기는 여기서 버린다. 남겨 두면 정원을 잡아먹고, 인원이 짝수인 반에도
+    // 가상의 학생이 남는다. [시작]을 누를 때 그 판의 인원으로 다시 넣는다.
+    this.sql.exec("DELETE FROM players WHERE id LIKE ?", `${BOT_PREFIX}%`);
 
     const quizCount = this.quizCount();
     if (!quizCount) throw new Refused(E.noQuiz, "이 방에는 문항이 없습니다.");
@@ -1192,30 +1356,9 @@ export class RoomDO extends DurableObject<Env> {
     let stealGranted = false;
 
     if (correct) {
-      this.sql.exec("UPDATE cells SET owner = ?, owned_by = ? WHERE idx = ?", me.team, me.id, cell);
-
-      // 보물·공격은 처음 점령할 때 한 번만 발동한다. bonus_taken > 0 이면 이미 소진된 칸이다.
-      // 폭풍은 점령할 때마다 발동하므로 별도 플래그 없이 항상 건다.
-      if (target.type === "T" && !target.bonus_taken) {
-        bonus = 2;
-        this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
-        this.sql.exec(
-          me.team === "H" ? "UPDATE room SET bonus_h = bonus_h + ? WHERE id = 1" : "UPDATE room SET bonus_c = bonus_c + ? WHERE id = 1",
-          bonus,
-        );
-      }
-      this.sql.exec("UPDATE players SET pos = ? WHERE id = ?", cell, me.id);
-      if (target.type === "S") this.sql.exec("UPDATE players SET skip_turns = 1 WHERE id = ?", me.id);
-      if (target.type === "A" && !target.bonus_taken) {
-        // 첫 점령 때만 공격 효과 발동. 이후 재점령은 일반 땅처럼 취급한다.
-        this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
-        // 예전에는 서버가 아무 칸이나 골라 즉시 빼앗았다. 이제는 학생이 판을 보고 직접 고른다.
-        // 빼앗을 상대 땅이 하나도 없으면 권리를 주지 않는다 — 고를 게 없는 손가락은 답답하기만 하다.
-        if (this.enemyCellCount(me.team) > 0) {
-          this.sql.exec("INSERT OR REPLACE INTO steals (player_id, granted_at) VALUES (?, ?)", me.id, Date.now());
-          stealGranted = true;
-        }
-      }
+      const won = this.claimCell(me, cell, target);
+      bonus = won.bonus;
+      stealGranted = won.stealGranted;
     }
 
     const gain = correct ? 1 + bonus : 0;
@@ -1252,6 +1395,45 @@ export class RoomDO extends DurableObject<Env> {
       serverNow: Date.now(),
     };
     return { reply, broadcast: this.patchMessage(changedCells, [me.id]) };
+  }
+
+  /**
+   * 정답이 맞았을 때 칸에 일어나는 일. **학생과 깍두기가 같은 길을 지난다.**
+   * 규칙이 두 벌이 되면 반드시 어긋나므로, 이 자리 말고 다른 데서 칸을 먹지 않는다.
+   */
+  private claimCell(
+    me: PlayerRow,
+    cell: number,
+    target: CellRow,
+  ): { bonus: number; stealGranted: boolean } {
+    let bonus = 0;
+    let stealGranted = false;
+
+    this.sql.exec("UPDATE cells SET owner = ?, owned_by = ? WHERE idx = ?", me.team, me.id, cell);
+
+    // 보물·공격은 처음 점령할 때 한 번만 발동한다. bonus_taken > 0 이면 이미 소진된 칸이다.
+    // 폭풍은 점령할 때마다 발동하므로 별도 플래그 없이 항상 건다.
+    if (target.type === "T" && !target.bonus_taken) {
+      bonus = 2;
+      this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
+      this.sql.exec(
+        me.team === "H" ? "UPDATE room SET bonus_h = bonus_h + ? WHERE id = 1" : "UPDATE room SET bonus_c = bonus_c + ? WHERE id = 1",
+        bonus,
+      );
+    }
+    this.sql.exec("UPDATE players SET pos = ? WHERE id = ?", cell, me.id);
+    if (target.type === "S") this.sql.exec("UPDATE players SET skip_turns = 1 WHERE id = ?", me.id);
+    if (target.type === "A" && !target.bonus_taken) {
+      // 첫 점령 때만 공격 효과 발동. 이후 재점령은 일반 땅처럼 취급한다.
+      this.sql.exec("UPDATE cells SET bonus_taken = 1 WHERE idx = ?", cell);
+      // 예전에는 서버가 아무 칸이나 골라 즉시 빼앗았다. 이제는 학생이 판을 보고 직접 고른다.
+      // 빼앗을 상대 땅이 하나도 없으면 권리를 주지 않는다 — 고를 게 없는 손가락은 답답하기만 하다.
+      if (this.enemyCellCount(me.team) > 0) {
+        this.sql.exec("INSERT OR REPLACE INTO steals (player_id, granted_at) VALUES (?, ?)", me.id, Date.now());
+        stealGranted = true;
+      }
+    }
+    return { bonus, stealGranted };
   }
 
   /** 선생님이 칸 하나를 눌러 문제와 정답을 확인한다. 상태는 건드리지 않는다. */
@@ -1309,7 +1491,7 @@ export class RoomDO extends DurableObject<Env> {
         const out = this.advanceTurn();
         return out.ended
           ? { reply: { t: "ok" }, broadcastState: true }
-          : { reply: { t: "ok" }, broadcast: this.turnMessage() };
+          : { reply: { t: "ok" }, broadcast: this.turnMessage(out.cells) };
       }
       case "end": {
         const result = this.endGame();

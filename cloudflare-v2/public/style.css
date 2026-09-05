@@ -268,3 +268,6 @@
 .mini .input{margin-top:2px;font-size:1rem}
 /* 판 크기 안내는 숫자를 읽는 줄이다. 다른 hint 보다 한 치수 크게 */
 #size-hint{font-size:13px;line-height:1.6}
+
+/* 짝을 맞추러 들어온 가상의 학생. 사람과 한눈에 구분돼야 한다 (2026-09-05) */
+.person.bot{background:#eef1f4;color:#6d8390;border-style:dashed}

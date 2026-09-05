@@ -241,12 +241,15 @@ function dashboard() {
       && ((online.size && !online.has(p.id) && behind >= 2) || behind >= 3);
 
     let status = "정상";
-    if (state.status !== "running") status = "· 대기/종료";
+    // 깍두기는 짝을 맞추러 들어온 가상의 학생이다. 소켓이 없어 늘 끊긴 것처럼 보이지만
+    // 다가가 볼 사람이 없다. 걸러 내지 않으면 판마다 헛경보가 하나씩 뜬다.
+    if (p.bot) status = "🤖 깍두기(가상)";
+    else if (state.status !== "running") status = "· 대기/종료";
     else if (!online.has(p.id)) status = "· 접속 끊김";
     else if (p.pos !== null && free === 0) { status = "⚠ 도전할 칸 없음"; alarms.push([p.name, "[다음 턴]을 누르면 자동으로 옮겨 줍니다"]); }
     else if (q >= 2) { status = `⛔ 자기 팀 턴 ${q}회 조용함`; alarms.push([p.name, "나갔다 다시 들어오게 하세요(F5 → 이름 재입력)"]); }
     else if (q === 1) status = "⚠ 직전 턴에 조용했음";
-    if (onScreen) status = `🙋 ${status}`;
+    if (onScreen && !p.bot) status = `🙋 ${status}`;
 
     say(`  ${pad(p.name, 11)}${pad(p.team === "H" ? "홍" : "청", 4)}${pad(label(p.pos, state.cols), 6)}`
       + `${pad(free, 9)}${pad(last ? ago(now - last) : "없음", 9)}${pad(behind, 6)}${status}`);

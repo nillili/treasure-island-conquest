@@ -4,10 +4,11 @@
  *   npx wrangler dev --port 8799        (다른 창에서 먼저)
  *   node tools/stage.mjs [--base 주소]
  *
- * 학생 넷이 붙는다.
- *   · 성실이 · 꾸준이 — 선생님이 [다음 턴]을 누를 때마다 계속 푼다
- *   · 멈춤이         — 1라운드만 풀고 조용해진다 (화면이 굳은 학생)
- *   · 유령이         — 한 번도 안 풀고 접속까지 끊는다 (나가 버린 학생)
+ * 학생 다섯이 붙는다. **홀수라 [시작]을 누르면 깍두기가 짝으로 들어온다.**
+ *   · 성실이 · 꾸준이 · 튼튼이 — 선생님이 [다음 턴]을 누를 때마다 계속 푼다
+ *   · 멈춤이                  — 1라운드만 풀고 조용해진다 (화면이 굳은 학생)
+ *   · 유령이                  — 한 번도 안 풀고 접속까지 끊는다 (나가 버린 학생)
+ *   · 🤖 깍두기               — 서버가 넣는 가상의 학생. 사람이 조종하지 않는다
  *
  * 라운드를 5까지 올린 뒤 선생님 자리를 비운다. 그때부터 사람이 브라우저로 그 방에 들어와
  * 오른쪽 맨 위 "🙋 도와줄 학생" 에 멈춤이·유령이만 뜨는지 보면 된다.
@@ -82,6 +83,7 @@ class Client {
       this.state.cellLocks = msg.cellLocks;
       this.state.status = msg.status;
     } else if (msg.t === "turn" && this.state) {
+      for (const c of msg.cells ?? []) this.state.board[c.idx] = { t: c.t, o: c.o };
       Object.assign(this.state, {
         status: msg.status, round: msg.round, turnTeam: msg.turnTeam,
         players: msg.players, cellLocks: msg.cellLocks,
@@ -164,7 +166,7 @@ ROOM = room.code;
 // ── 학생 넷 ───────────────────────────────────────────────────────────────
 const teacher = await new Client("선생님", { t: "hello", role: "teacher" }).connect();
 const students = [];
-for (const n of ["성실이", "꾸준이", "멈춤이", "유령이"]) {
+for (const n of ["성실이", "꾸준이", "튼튼이", "멈춤이", "유령이"]) {
   students.push(await new Client(n, { t: "hello", role: "student", name: n }).connect());
 }
 
@@ -187,7 +189,7 @@ for (let step = 0; step < 14; step++) {
 await sleep(600);
 console.log(`\n라운드 ${teacher.state.round} · 상태 ${teacher.state.status}`);
 for (const p of teacher.state.players) {
-  console.log(`  ${p.name}  팀 ${p.team === "H" ? "홍" : "청"}  마지막으로 푼 라운드 ${p.lastRound}`);
+  console.log(`  ${p.bot ? "🤖" : "  "} ${p.name}  팀 ${p.team === "H" ? "홍" : "청"}  마지막으로 푼 라운드 ${p.lastRound}`);
 }
 
 // 유령이는 접속까지 끊는다. 선생님 자리는 비워, 사람이 브라우저로 들어올 수 있게 한다.
@@ -197,6 +199,7 @@ teacher.ws.close();
 console.log(`\n브라우저에서 확인하세요 — ${BASE}`);
 console.log(`  선생님 ${ID} / ${PW}  →  열려 있는 내 방  →  ${ROOM}`);
 console.log("  오른쪽 맨 위 '🙋 도와줄 학생' 에 멈춤이 · 유령이만 뜨면 성공입니다.");
+console.log("  학생 명단에 '🤖 깍두기' 가 있고, 그 말이 판 위에서 혼자 움직이면 성공입니다.");
 console.log("\n성실이 · 꾸준이는 [다음 턴]을 누를 때마다 계속 풉니다. Ctrl+C 로 끝냅니다.");
 
 setInterval(() => {
@@ -206,6 +209,6 @@ setInterval(() => {
 // 사람이 [다음 턴]을 누르면 둘은 따라 풀고 둘은 가만히 있는다 — 진짜 교실과 같은 그림.
 setInterval(() => {
   for (const s of students) {
-    if (s.name === "성실이" || s.name === "꾸준이") s.play().catch(() => {});
+    if (["성실이", "꾸준이", "튼튼이"].includes(s.name)) s.play().catch(() => {});
   }
 }, 1500);
