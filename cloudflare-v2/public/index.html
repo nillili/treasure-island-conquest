@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-09-05b">
-<script src="/net.js?v=2026-09-05b" defer></script>
-<script src="/app.js?v=2026-09-05b" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-09-05c">
+<script src="/net.js?v=2026-09-05c" defer></script>
+<script src="/sfx.js?v=2026-09-05c" defer></script>
+<script src="/app.js?v=2026-09-05c" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -208,6 +209,7 @@
     <span id="s-name"></span>
     <span class="push"></span>
     <span class="net" id="s-net">연결 중…</span>
+    <button class="button muted sfx-btn" id="s-sfx" title="효과음 켜기/끄기">🔇</button>
     <button class="button muted" data-leave>나가기</button>
   </div>
   <div class="layout student-layout">
@@ -252,6 +254,7 @@
     <span id="a-room"></span>
     <span class="push"></span>
     <span class="net" id="a-net">연결 중…</span>
+    <button class="button muted sfx-btn" id="a-sfx" title="효과음 켜기/끄기">🔊</button>
     <button class="button muted" id="back-home">⚙ 설정</button>
   </div>
   <div class="layout admin-layout">

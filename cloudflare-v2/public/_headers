@@ -14,10 +14,16 @@
 /net.js
   Cache-Control: no-cache, no-store, must-revalidate
 
+/sfx.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
 /style.css
   Cache-Control: no-cache, no-store, must-revalidate
 
 /fx-preview*
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/sfx-preview*
   Cache-Control: no-cache, no-store, must-revalidate
 
 # 그림은 오래 캐시한다. 배경 2.1MB + 3D 8장 1.5MB 를 매번 새로 받게 두면 교실 와이파이에서

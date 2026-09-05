@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-05b";
+const APP_BUILD = "2026-09-05c";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -37,6 +37,51 @@ const ICON = { N: "", T: "📦", S: "⛈️", A: "💥" };
 /** 남은 시간은 반드시 이걸로 잰다. 학생 PC 시계가 틀어져도 정상 동작한다. */
 const now = () => Date.now() + APP.clockOffset;
 const newActionId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/* ── 효과음 ─────────────────────────────────────────────────────────────────
+ * 소리는 /sfx.js 가 그 자리에서 계산해 낸다. 음원 파일은 없다.
+ *
+ * 여기서 지키는 것 하나 — **소리는 게임을 절대 바꾸지 않는다.** sfx.js 가 없어도,
+ * 오디오가 막힌 기기여도, 이 아래 코드는 아무 일도 안 한 것처럼 지나가야 한다.
+ * 그래서 호출은 전부 sfx() 를 거친다.
+ */
+const sfx = (name) => { try { window.SFX && window.SFX.play(name); } catch (_) {} };
+
+/**
+ * 너무 자주 울리는 것을 막는다.
+ *
+ * 한 턴에 스무 명이 동시에 답을 낸다. patch 가 오는 대로 점령 소리를 내면
+ * 톡톡톡톡 하고 스무 번이 겹쳐 소음이 된다. 간격을 두고 한 번만 낸다.
+ */
+const sfxAt = {};
+function sfxSlow(name, gapMs) {
+  const t = Date.now();
+  if (t - (sfxAt[name] || 0) < gapMs) return;
+  sfxAt[name] = t;
+  sfx(name);
+}
+
+/**
+ * 소리 단추를 켠다. 역할이 정해진 뒤에 부른다.
+ *
+ * 기본값이 화면마다 다르다 —
+ *  · 선생님 화면은 **켬**. TV 스피커 하나로 교실 전체가 같이 듣는다.
+ *  · 학생 화면은 **끔**. 25대가 제각각 울리면 수업이 안 된다.
+ * 한 번이라도 사람이 단추를 눌렀으면 그 선택이 기본값을 이긴다(sfx.js 가 기억한다).
+ */
+function setupSfx(role) {
+  if (!window.SFX) return;
+  window.SFX.setDefault(role === "teacher");
+  const btn = $(role === "teacher" ? "a-sfx" : "s-sfx");
+  if (!btn) return;
+  const paint = () => { btn.textContent = window.SFX.enabled ? "🔊" : "🔇"; };
+  paint();
+  btn.onclick = () => {
+    window.SFX.setEnabled(!window.SFX.enabled);
+    paint();
+    if (window.SFX.enabled) sfx("myturn"); // 켰으면 들려 준다. 안 들리면 켠 줄 모른다.
+  };
+}
 
 function toast(text) {
   const el = $("toast");
@@ -449,6 +494,7 @@ function renderAdmin() {
 
 const render = () => (APP.role === "teacher" ? renderAdmin() : renderStudent());
 
+let tickedAt = ""; // 마지막으로 째깍한 "라운드:팀:초"
 function updateTimer() {
   const st = APP.state;
   if (!st) return;
@@ -457,6 +503,14 @@ function updateTimer() {
   const text = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const el = APP.role === "teacher" ? $("a-timer") : $("s-timer");
   if (el) el.textContent = text;
+
+  // 마지막 5초만 째깍거린다. 턴이 20초라 10초부터 울리면 절반 내내 시끄럽다.
+  // 학생 화면은 **자기 팀 차례일 때만** — 남의 턴에 재촉당할 이유가 없다.
+  const listening = APP.role === "teacher" || st.turnTeam === st.myPlayer?.team;
+  if (st.status === "running" && st.turnTeam && listening && s >= 1 && s <= 5) {
+    const key = `${st.round}:${st.turnTeam}:${s}`; // 250ms 마다 도니 같은 초에 네 번 온다
+    if (tickedAt !== key) { tickedAt = key; sfx("tick"); }
+  }
   // 위쪽 타이머는 어느 팀 시간인지 안 보인다. 차례인 팀 무대 밑에 크게 한 번 더 띄운다.
   if (APP.role === "teacher" && st.turnTeam) {
     const clock = $(`fx-clock-${st.turnTeam}`);
@@ -522,7 +576,12 @@ function onMessage(msg) {
     }
     case "patch": {
       if (!APP.state || !acceptRev(msg)) return;
+      // 임자가 새로 생긴 칸이 있으면 선생님 화면에서 톡 소리를 낸다. 판이 살아 있다는
+      // 표시다. 학생 화면에서는 안 낸다 — 자기 결과 소리와 겹쳐 정신없어진다.
+      const taken = APP.role === "teacher"
+        && msg.cells.some((c) => c.o && !APP.state.board[c.idx]?.o);
       for (const c of msg.cells) APP.state.board[c.idx] = { t: c.t, o: c.o };
+      if (taken) sfxSlow("claim", 450);
       for (const p of msg.players) {
         const at = APP.state.players.findIndex((x) => x.id === p.id);
         if (at >= 0) APP.state.players[at] = p;
@@ -538,6 +597,10 @@ function onMessage(msg) {
     }
     case "turn": {
       if (!APP.state || !acceptRev(msg)) return;
+      // 종을 친다. 선생님 화면은 매 턴(교실 전체에 차례가 바뀐 것을 알린다),
+      // 학생 화면은 **자기 팀 차례일 때만**. 상대 턴에 울리면 헷갈린다.
+      if (APP.role === "teacher") sfx("myturn");
+      else if (msg.turnTeam && msg.turnTeam === APP.state.myPlayer?.team) sfx("myturn");
       // 턴이 열리면서 이미 바뀐 칸 — 깍두기가 먹은 땅과 새로 선 자리부터 칠한다
       for (const c of msg.cells || []) APP.state.board[c.idx] = { t: c.t, o: c.o };
       Object.assign(APP.state, {
@@ -670,6 +733,8 @@ const FX_SAY = {
   attack: "💥 공격! 땅을 빼앗을 수 있다",
 };
 function showItemFx(kind) {
+  // 그림과 소리가 같이 나야 한 사건으로 들린다. 정답 소리(0.97초)는 이미 지나갔다.
+  sfx(kind);
   const team = APP.state?.myPlayer?.team ?? "H";
   $("play-fx-art").innerHTML = fxImg(kind, team);
   $("play-fx-say").textContent = FX_SAY[kind] ?? "";
@@ -741,6 +806,7 @@ function showResult(msg) {
     APP.state.myPlayer.playedThisTurn = true;
     if (msg.skipNextTurn) APP.state.iAmSkipping = true;
   }
+  sfx(msg.correct ? "correct" : "wrong");
   $("result-big").className = `big ${msg.correct ? "ok" : "no"}`;
   $("result-big").textContent = msg.correct ? "정답!" : "아쉬워요";
   $("result-message").textContent = msg.correct && msg.bonusSkipped
@@ -878,6 +944,7 @@ async function enterAsStudent(code, name) {
   APP.role = "student";
   APP.code = code;
   APP.rev = -1;
+  setupSfx("student");
   closeModal("student-login");
   showScreen("student-screen");
   $("s-quiz").textContent = room.quizTitle || "-";
@@ -895,6 +962,7 @@ function enterAsTeacher(code) {
   APP.role = "teacher";
   APP.code = code;
   APP.rev = -1;
+  setupSfx("teacher");
   showScreen("admin-screen");
   netConnect(code, { t: "hello", role: "teacher" }, onMessage, onStatus);
 }
@@ -1259,6 +1327,7 @@ async function sendUpload(form) {
 
 /** [종료]를 누른 그 자리에서 결과를 보여 준다. 지난 게임은 남기지 않는다. */
 function showGameOver(msg) {
+  sfx("gameover");
   if (APP.mode === "solving") { APP.mode = "waiting"; hideQuiz(); }
   const medal = ["🥇", "🥈", "🥉"];
   const rows = msg.players

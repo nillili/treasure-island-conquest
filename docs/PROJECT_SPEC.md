@@ -1,6 +1,6 @@
 # PROJECT_SPEC — 보물섬 점령전
 
-> 작성일 2026-08-03 · 최종 갱신 **2026-09-05** · 기준 커밋 **`670be75`** (main) · 이후 미커밋 변경 있음
+> 작성일 2026-08-03 · 최종 갱신 **2026-09-05** · 기준 커밋 **`9691dea`** (main) · 이후 미커밋 변경 있음
 > 파생 문서(API 레퍼런스·매뉴얼·테스트 계획·온보딩)의 단일 설계 기준(SSOT)
 >
 > 이 문서는 **실제 소스를 읽어** 작성했다. 확인하지 못한 것은 `(미확인)` 으로 적는다.
@@ -258,6 +258,34 @@ flowchart LR
 | FR-J15 | 기록의 **인원·시도·정답은 실제 학생만** 센다(점수에는 깍두기가 먹은 땅이 들어간다) | `recordGame` |
 | FR-J16 | 화면 명단에 🤖 로 구분해 보이고, 내보내기 버튼이 없다 | [app.js](../cloudflare-v2/public/app.js) `renderAdmin` |
 
+### 효과음 (FR-K) — 2026-09-05 신설
+
+> 음원 파일을 쓰지 않는다. 브라우저가 **그 자리에서 파형을 계산해** 낸다(Web Audio).
+> 배경 그림 하나가 이미 2.1MB 인 교실 와이파이에 mp3 를 더 얹지 않으려는 선택이고,
+> 파일이 없으니 §9-3 의 캐시 사고도 애초에 생기지 않는다.
+>
+> 첫 판(길이 0.1~0.4초)은 "이게 뭐지" 하고 지나가 버렸다. 원인은 길이만이 아니라
+> **울림이 없다는 것**이었다 — 아무 공간도 없는 데서 난 소리는 음이 맞아도 얄팍하다.
+> 방 울림을 계산해 넣고 길이를 2~3배로 늘렸다.
+
+| ID | 요구사항 | 구현 위치 |
+|---|---|---|
+| FR-K1 | 소리 9종을 **코드로 합성한다.** 음원 파일이 없다 | [public/sfx.js](../cloudflare-v2/public/sfx.js) `DEFS` |
+| FR-K2 | **소리는 게임을 절대 막지 않는다.** 오디오가 없는 기기·막힌 권한·없는 이름 — 무엇이든 조용히 지나간다 | `sfx.js` 전 진입점 `try` · [app.js](../cloudflare-v2/public/app.js) `sfx()` |
+| FR-K3 | 첫 소리는 **사람이 화면을 건드린 뒤에** 난다(브라우저 규칙). 잠긴 동안 소리를 쌓아 두지 않는다 | `unlock` · `play` (`state !== "running"` 이면 그냥 나간다) |
+| FR-K4 | 각 소리는 마른 소리와 **울림**을 함께 낸다. 잡음을 지수로 깎아 만든 임펄스 응답을 쓴다 | `reverb` · `tone`/`noise` 의 `verb` |
+| FR-K5 | **선생님 화면은 켬, 학생 화면은 끔**이 기본이다. TV 스피커 하나로 교실이 같이 듣고, 25대가 제각각 울리면 수업이 안 된다 | `setupSfx` · `SFX.setDefault` |
+| FR-K6 | 사람이 한 번이라도 단추를 누르면 **그 선택이 기본값을 이긴다**. 브라우저에 기억된다 | `SFX.setDefault` (`localStorage` `treasure.sfx`) |
+| FR-K7 | 정답 ⭕ · 오답 ❌ 는 결과창이 뜨는 그 순간 난다 | `showResult` |
+| FR-K8 | 보물 📦 · 폭풍 ⛈️ · 공격 💥 는 **3D 그림과 같이** 난다. 한 사건으로 들려야 한다 | `showItemFx` |
+| FR-K9 | 턴이 열리면 종 🔔 — 선생님 화면은 매 턴, 학생 화면은 **자기 팀 차례일 때만** | `onMessage` `case "turn"` |
+| FR-K10 | 땅이 넘어가면 톡 🚩 — **선생님 화면만**. 스무 명이 동시에 답하면 patch 가 스무 번 오므로 **0.45초 간격으로 솎아낸다** | `case "patch"` · `sfxSlow` |
+| FR-K11 | 남은 **5초**부터 째깍 ⏱️. 턴이 20초라 10초부터면 절반 내내 시끄럽다. 학생은 자기 팀 차례일 때만 | `updateTimer` (`tickedAt`) |
+| FR-K12 | 게임이 끝나면 팡파르 🏁 | `showGameOver` |
+| FR-K13 | 소리를 끄면 **오디오 호출 자체가 없다.** 볼륨 0 이 아니라 아예 안 만든다 | `play` (`S.on === false`) |
+| FR-K14 | 브라우저 없이 듣고 고르는 확인용 페이지가 있다 — `/sfx-preview` | [public/sfx-preview.html](../cloudflare-v2/public/sfx-preview.html) |
+| FR-K15 | 샘플 음원을 `public/assets/sfx/<이름>.<확장자>` 에 넣으면 합성 소리와 **나란히 비교**된다 | `sfx-preview.html` `findSamples` |
+
 ### 관제 · 감시 (FR-I)
 
 | ID | 요구사항 | 구현 위치 |
@@ -329,6 +357,16 @@ flowchart LR
 
 **모달 한 자리를 돌려 쓴다.** 문제·결과·아이템 연출·공격 안내가 `#play-modal` 을 차례로 쓴다.
 세대 번호 `playGen` 으로 "내 창인지"만 확인해 타이머가 남의 창을 닫지 못하게 한다(2026-08-29).
+
+화면 파일은 넷이다. **[sfx.js](../cloudflare-v2/public/sfx.js) 는 `app.js` 보다 먼저 실려야 한다** —
+`setupSfx` 가 `window.SFX` 를 찾기 때문이다(§9-2 가 순서를 검사한다).
+
+| 파일 | 줄 | 맡은 일 |
+|---|---|---|
+| [public/app.js](../cloudflare-v2/public/app.js) | 1675 | 화면 전부 |
+| [public/net.js](../cloudflare-v2/public/net.js) | 180 | 소켓 · 재연결 · 폴백 |
+| [public/sfx.js](../cloudflare-v2/public/sfx.js) | 341 | 효과음 합성 (FR-K). `app.js` 는 `sfx(이름)` 한 줄로만 쓴다 |
+| [public/sfx-preview.html](../cloudflare-v2/public/sfx-preview.html) | 242 | `/sfx-preview` — 소리를 듣고 고르는 확인용 페이지 |
 
 ### 4-4. Worker 요청 처리 체인
 
@@ -810,6 +848,17 @@ flowchart TD
 - 수업 중 실시간 관찰(`tools/watch.mjs`)은 선생님 노트북의 `logs/` 에만 쌓이고,
   이 폴더는 `.gitignore` 에 걸려 있다.
 
+### 8-7. 소리는 게임을 바꾸지 않는다
+
+효과음은 **있으면 좋고 없어도 그만인 것**으로 설계했다. 수업이 소리 때문에 멈추면 안 된다.
+
+- `app.js` 는 `sfx(이름)` 한 줄로만 부른다. 그 안에서 `window.SFX` 가 없어도, 오디오가
+  막혀 있어도, 이름이 틀려도 **조용히 지나간다.** 반환값을 보는 곳이 한 군데도 없다.
+- 소리를 끄면 오디오 호출 자체가 없다. 볼륨 0 이 아니라 아예 안 만든다.
+- 브라우저는 사람이 화면을 건드리기 전의 소리를 잠가 둔다. 잠긴 동안 밀어 넣으면 나중에
+  **한꺼번에 터진다** — 그래서 잠겨 있으면 그냥 나간다.
+- 아이폰·아이패드의 **무음 스위치**는 웹에서 우회할 수 없다. 안 들리면 그것부터 본다.
+
 ---
 
 ## 9. 빌드 · 배포 · 마이그레이션
@@ -819,7 +868,7 @@ flowchart TD
 | 명령 | 하는 일 |
 |---|---|
 | `npm run dev` | 로컬 서버 (`wrangler dev`) |
-| `npm test` | vitest — **진짜 Workers 런타임에서 실제 DO·D1 로** 208개 |
+| `npm test` | vitest — **진짜 Workers 런타임에서 실제 DO·D1 로** 219개 |
 | `npm run check` | `tsc --noEmit` + `wrangler deploy --dry-run` |
 | `npm run deploy` | 실서버 배포 |
 | `npm run db:local` / `db:remote` | D1 마이그레이션 |
@@ -828,9 +877,10 @@ flowchart TD
 
 ### 9-2. 배포 전 점검 (`pregame-check`)
 
-1. `npx vitest run` — **208개**
-2. 검사 도구 6종 — `node tools/{freeze,steal,result,trap,help,plan}-check.mjs`
+1. `npx vitest run` — **219개**
+2. 검사 도구 8종 — `node tools/{freeze,steal,result,trap,help,plan,watchauto,sfx}-check.mjs`
 3. **판번호 세 곳이 같은가** — `public/app.js` `APP_BUILD` · `public/index.html` `?v=` · `src/diagnose.ts` `BUILD`
+   (`sfx-check` 가 이 셋을 대조한다. 손으로 볼 필요가 없어졌다)
 4. 배포 후 실제로 배달됐는지 — `curl .../app.js | grep APP_BUILD`
 5. 감시 서비스 생존 — `systemctl --user is-active treasure-watch.service`
 
@@ -843,6 +893,10 @@ flowchart TD
   이미 돌고 있는 방에는 안 생긴다. 새 표를 만든다.
 - **`public/app.js` 는 `src/*.ts` 의 규칙을 베껴 쓴다.** 한쪽만 고치면 어긋난다 — §11-4.
 - 경로에 한글이 있어서 노드 도구는 `URL.pathname` 이 아니라 **`fileURLToPath`** 를 써야 한다.
+- **없는 파일도 200 이 온다.** `not_found_handling: "single-page-application"` 이라 404 대신
+  `index.html` 이 돌아온다. 파일이 있는지 확인할 때 **status 만 보면 다 있다고 나온다** —
+  `Content-Type` 을 봐야 한다(2026-09-05, 샘플 음원 찾기에서 실제로 걸렸다).
+- **`sfx.js` 는 `app.js` 보다 먼저 싣는다.** 뒤면 `setupSfx` 에서 `window.SFX` 가 없다.
 
 ### 9-4. 마이그레이션
 
@@ -1004,3 +1058,11 @@ v1 시절의 상세한 사건 기록(플랜 대비 차이 11건, 2026-08-05 시�
   FR-D4 의 점수 보정은 저절로 0 이 되어 이중 계산이 없다. 이상 징후·수업 기록·🙋·감시 표에서는
   제외한다(소켓이 없어 늘 '끊김' 으로 보이지만 다가가 볼 사람이 없다).
   테스트 10개 추가 · 고의 파손 4종 확인.
+- **2026-09-05: 효과음 신설(FR-K 15항).** 음원 파일 없이 브라우저가 파형을 계산해 소리 9종을
+  만든다(`public/sfx.js`). 배경 그림만으로 이미 2.1MB 인 교실 와이파이에 mp3 를 더 얹지 않으려는
+  선택이고, 파일이 없으니 §9-3 의 캐시 사고도 생기지 않는다. 첫 판은 길이 0.1~0.4초로 "이게 뭐지"
+  하고 지나갔는데, 원인이 길이만이 아니라 **울림이 없다는 것**이어서 방 울림(`reverb`)을 넣고
+  길이를 2~3배로 늘렸다. 소리는 게임을 절대 막지 않는다(§8-7). 선생님 화면은 켬 · 학생 화면은
+  끔이 기본이고, 사람이 누른 선택이 기본값을 이긴다. 확인용 페이지 `/sfx-preview` 와
+  검사 도구 `tools/sfx-check.mjs`(24개 항목 · 고의 파손 17종 확인)를 함께 뒀다.
+  판번호 `2026-09-05c`. §4-3·§8-7·§9-1·§9-2·§9-3 갱신.
