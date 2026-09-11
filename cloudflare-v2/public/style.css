@@ -69,7 +69,7 @@
 .quizsets{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:320px;overflow:auto}
 .quizsets li label{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;
   padding:10px 12px;border:2px solid #dbe3e8;border-radius:10px;background:#fff;cursor:pointer}
-.quizsets li label:hover{border-color:#b9c8d2}
+.quizsets li{display:flex;gap:6px;align-items:stretch}.quizsets li label{flex:1;min-width:0}.quizsets .dl{display:flex;align-items:center;padding:0 11px;border-radius:9px;background:#e2e8eb;text-decoration:none;font-size:15px;flex:none}.quizsets .dl:hover{background:#cfd9df}.quizsets li label:hover{border-color:#b9c8d2}
 .quizsets input:checked+b{color:#12707f}
 .quizsets li:has(input:checked) label{border-color:var(--pick);background:#effbfc}
 .quizsets b{font-size:15px}

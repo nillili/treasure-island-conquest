@@ -217,6 +217,57 @@ async function rename(request: Request, env: Env, id: number, teacherId: string)
   return json({ ok: true, title });
 }
 
+/**
+ * CSV 한 칸. 쉼표·따옴표·줄바꿈이 들어 있으면 따옴표로 감싸고, 안의 따옴표는 둘로 늘린다.
+ */
+const csvCell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+
+/**
+ * 보관함의 문항을 **올릴 때와 똑같은 CSV** 로 되돌린다.
+ *
+ * 원본 파일은 보관하지 않는다(`items_json` 만 남는다). 그러니 내려받기는 "그때 그 파일"이
+ * 아니라 **지금 문항으로 다시 만든 파일**이다. 열 이름과 정답 표기(번호)를 업로드 형식과
+ * 같게 맞춰 두었으므로, 받아서 고친 뒤 그대로 다시 올릴 수 있다 — 그게 이 기능의 쓸모다.
+ *
+ * · 맨 앞의 BOM 은 엑셀에서 한글이 깨지지 않게 한다(`public/sample-quiz.csv` 와 같다).
+ * · 보기 칸 수는 **가장 많은 문항에 맞춘다.** 보기가 적은 문항은 뒤를 빈 칸으로 둔다.
+ */
+function toCsv(items: QuizItem[]): string {
+  const width = Math.max(2, ...items.map((it) => it.options.length));
+  const head = ["질문", "정답", ...Array.from({ length: width }, (_, i) => `예제${i + 1}`)];
+  const rows = items.map((it) => {
+    const cells = [it.q, String(it.ans + 1), ...it.options];
+    while (cells.length < head.length) cells.push("");
+    return cells.map(csvCell).join(",");
+  });
+  return `\uFEFF${[head.join(","), ...rows].join("\r\n")}\r\n`;
+}
+
+/** 내려받기. 남의 퀴즈는 내려받을 수 없다 — 다른 조회와 같이 `teacher_id` 를 같이 건다. */
+async function download(env: Env, id: number, teacherId: string): Promise<Response> {
+  const row = await env.DB.prepare(
+    "SELECT title, items_json FROM quiz_sets WHERE id = ? AND teacher_id = ?",
+  )
+    .bind(id, teacherId)
+    .first<{ title: string; items_json: string }>();
+  if (!row) return fail("없는 퀴즈입니다.", 404);
+
+  const items = JSON.parse(row.items_json) as QuizItem[];
+  if (!items.length) return fail("문항이 없는 퀴즈입니다.", 409);
+
+  // 파일 이름에 못 쓰는 글자만 걸러낸다. 제목이 한글이라 filename* 로 한 번 더 적는다 —
+  // 옛 브라우저는 filename= 을, 요즘 브라우저는 filename*= 을 읽는다.
+  const safe = row.title.replace(/[\\/:*?"<>|]/g, "_").trim() || `퀴즈${id}`;
+  return new Response(toCsv(items), {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition":
+        `attachment; filename="quiz-${id}.csv"; filename*=UTF-8''${encodeURIComponent(safe)}.csv`,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 export async function handleQuizSets(request: Request, env: Env, path: string): Promise<Response> {
   const teacherId = await requireTeacher(request, env);
   if (teacherId instanceof Response) return teacherId;
@@ -227,13 +278,17 @@ export async function handleQuizSets(request: Request, env: Env, path: string): 
     return fail("GET 또는 POST 로 보내 주세요.", 405);
   }
 
-  const m = /^\/api\/quizsets\/(\d+)(\/title)?$/.exec(path);
+  const m = /^\/api\/quizsets\/(\d+)(\/title|\/download)?$/.exec(path);
   if (!m) return fail("없는 주소입니다.", 404);
   const id = Number(m[1]);
 
-  if (m[2]) {
+  if (m[2] === "/title") {
     if (request.method !== "PATCH") return fail("PATCH 로 보내 주세요.", 405);
     return rename(request, env, id, teacherId);
+  }
+  if (m[2] === "/download") {
+    if (request.method !== "GET") return fail("GET 으로 보내 주세요.", 405);
+    return download(env, id, teacherId);
   }
   if (request.method === "GET") return preview(env, id, teacherId);
   if (request.method === "DELETE") return remove(env, id, teacherId);

@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-05c";
+const APP_BUILD = "2026-09-11a";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -990,11 +990,15 @@ async function loadSets() {
   const { sets } = await api("/api/quizsets");
   APP.sets = sets;
   $("quizsets").innerHTML = sets.length
-    ? sets.map((s, i) => `<li><label>
-        <input type="radio" name="quizset" value="${s.id}"${i === 0 ? " checked" : ""}>
-        <b>${esc(s.title)}</b>
-        <small>${s.itemCount}문항${s.skipped ? ` · 건너뜀 ${s.skipped}` : ""}<br>${new Date(s.updatedAt).toLocaleDateString("ko-KR")}</small>
-      </label></li>`).join("")
+    ? sets.map((s, i) => `<li>
+        <label>
+          <input type="radio" name="quizset" value="${s.id}"${i === 0 ? " checked" : ""}>
+          <b>${esc(s.title)}</b>
+          <small>${s.itemCount}문항${s.skipped ? ` · 건너뜀 ${s.skipped}` : ""}<br>${new Date(s.updatedAt).toLocaleDateString("ko-KR")}</small>
+        </label>
+        <a class="dl" href="/api/quizsets/${s.id}/download" download
+           title="CSV 로 내려받기">📥</a>
+      </li>`).join("")
     : '<li class="empty">아직 올린 퀴즈가 없어요. [＋ 엑셀 올리기]를 눌러 주세요.</li>';
 }
 
