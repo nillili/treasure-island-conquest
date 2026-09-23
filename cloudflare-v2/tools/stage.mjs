@@ -24,17 +24,12 @@ const arg = (name, fallback) => {
   return i > 0 ? process.argv[i + 1] : fallback;
 };
 
+import { NEED_LOGIN, teacherCookie } from "./session.mjs";
+
 const BASE = arg("base", "http://127.0.0.1:8799");
 const WS = BASE.replace(/^http/, "ws");
-const ID = arg("id", "demo");
-const PW = arg("pw", "pw1234");
-
-/** 가입 코드는 .dev.vars 에 있다. 이 도구는 로컬에서만 쓰므로 거기서 그대로 읽는다. */
-const signupCode = () => {
-  const text = readFileSync(fileURLToPath(new URL("../.dev.vars", import.meta.url)), "utf8");
-  const line = text.split(/\r?\n/).find((l) => l.trim().startsWith("SIGNUP_CODE="));
-  return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "") : "";
-};
+// 누구로 들어갈지. 가짜 네오버스가 알아듣는 값이다(빈 값이면 보통 선생님).
+const WHO = arg("who", "");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -130,19 +125,12 @@ class Client {
 }
 
 // ── 선생님 ────────────────────────────────────────────────────────────────
-try {
-  await http("/api/auth/signup", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: signupCode(), id: ID, name: "김선생", password: PW }),
-  });
-  console.log(`선생님 새로 가입 · ${ID} / ${PW}`);
-} catch {
-  await http("/api/auth/login", {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: ID, password: PW }),
-  });
-  console.log(`선생님 로그인 · ${ID} / ${PW}`);
+cookie = await teacherCookie(BASE, { who: WHO });
+if (!cookie) {
+  console.error(NEED_LOGIN);
+  process.exit(1);
 }
+console.log("선생님으로 들어왔습니다.");
 
 let quizSetId;
 try {

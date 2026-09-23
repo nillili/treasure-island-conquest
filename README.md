@@ -44,9 +44,9 @@ v2 가 자리 잡을 때까지 둘 다 살려 둔다. 수업 중 사고가 나�
 ### 선생님
 
 ```
-1. [선생님] → 로그인 (처음이면 [가입하기] + 학교 가입 코드)
+1. [선생님] → 네오버스 로그인 (이 앱에는 가입도 비밀번호도 없다)
 2. ⚙ 설정 → 🩺 시스템 점검      수업 전에 한 번
-3. 📚 퀴즈 보관함에서 하나 선택   (가입하면 상식 샘플 50문항이 들어 있다)
+3. 📚 퀴즈 보관함에서 하나 선택   (처음 들어오면 상식 샘플 50문항이 들어 있다)
 4. 🆕 방 만들기 → 방번호 4자리를 학생들에게 알려 준다
 5. [들어가기] → 🆕 새 게임 → ▶ 시작 → 다음 턴 …
 6. 종료 → 결과가 그 자리에서 뜬다 (누가 몇 개 맞혔는지는 남기지 않는다)
@@ -78,7 +78,7 @@ v2 가 자리 잡을 때까지 둘 다 살려 둔다. 수업 중 사고가 나�
 
 ### ⚙️ 관제 (슈퍼관리자만)
 
-`teachers.is_super = 1` 인 계정에게만 머리줄에 톱니바퀴가 보인다. 누르면 학교 전체가 한 자리에 나온다.
+네오버스에서 `user_type = admin` 인 사람에게만 머리줄에 톱니바퀴가 보인다. 누르면 학교 전체가 한 자리에 나온다.
 
 - **지금 열려 있는 방** — 누가 열었든 전부. 방 안 상태(학생 수·접속 수)까지 실시간으로 물어본다.
 - **선생님 목록** — 퀴즈 수 · 수업 수 · 마지막 로그인. 줄을 누르면 그 선생님의 퀴즈와 지난 수업이 펼쳐진다.
@@ -96,16 +96,9 @@ v2 가 자리 잡을 때까지 둘 다 살려 둔다. 수업 중 사고가 나�
 떨어지는데, 그때는 수업 중인 학생도 끊긴 것처럼 보인다. '전원 폴백' 과 '전원 퇴장' 을
 가릴 수 없으면 아무 말도 하지 않는다 — 못 가리는 것을 단정해 두면 나중에 엉뚱한 데를 판다.
 
-**비밀번호 재설정** — 선생님 줄을 펼치면 버튼이 있다. 관제에서 **유일하게 남의 것을 바꾸는 자리**다.
-새 비밀번호를 적으면 그것으로, 비워 두면 임시 비밀번호를 지어 준다(헷갈리는 `0·O·1·l·I` 는 뺀다).
-지어 준 비밀번호는 **그 화면에서 한 번만** 보여 준다 — 어디에도 저장하지 않는다.
-바꾸면 그 선생님의 **열린 세션이 모두 끊긴다.** 안 그러면 옛 쿠키로 계속 들어와져 바꾼 뜻이 없다.
-
-옛 비밀번호는 묻지 않는다. 단방향 해시라 서버도 알 수 없고, 잊어버린 사람을 돕는 것이
-이 기능의 목적이기 때문이다. 그래서 **슈퍼관리자만** 부를 수 있어야 하고, 그 경계는
-테스트 8개로 묶어 두었다(슈퍼가 아니면 403 이 아니라 404 · GET 은 405 · 옛 비밀번호는 죽는지까지).
-
-권한은 DB 에서 준다.
+**여기에는 쓰기가 없다.** 비밀번호가 없어졌으므로 재설정할 것도 없다(2026-09-23).
+권한도 이 화면에서 주지 않는다 — 네오버스에서 `admin` 이 되면 다음 확인(최대 30초)에 열리고,
+내려가면 같은 시간 안에 닫힌다.
 
 ```bash
 npx wrangler d1 execute treasure --remote --command \
@@ -138,7 +131,10 @@ node tools/watch.mjs --room 1234 --save   # 방번호를 아는 경우
 `watch-auto.mjs` 는 **방이 닫혀도 죽지 않고 다시 기다린다.** 수업마다 사람이 새로 띄워야 하면
 정작 문제가 터진 그 시각의 기록만 비어 있게 된다. 붙고 떨어진 시각은 `logs/watch-auto.txt` 에 남는다.
 
-계정은 `.dev.vars` 의 `WATCH_ID` · `WATCH_PW` 에서 읽는다. **비밀번호를 명령줄에 적으면 셸 기록에 남는다.**
+선생님 자격은 `cloudflare-v2/.teacher.cookie` 한 줄에서 읽는다. 브라우저에서 네오버스로
+로그인한 뒤 그 탭의 `tsession` 쿠키를 적어 두면 된다(`chmod 600`). 네오버스 비밀번호나
+연결 토큰은 도구에 들어오지 않는다. 세션이 끝나면 다시 로그인해 그 파일을 새로 적는다 —
+도구가 몰래 다시 로그인하는 길은 없다. 그런 길이 있으면 그게 곧 뒷문이다.
 
 선생님 자격으로 붙어 학생들이 보는 것과 같은 것을 본다.
 **요청이 오지 않는 것 자체를 증상으로 잡는다** — 멈춘 화면은 서버에 아무것도 안 보내므로 서버 로그로는 보이지 않는다.
@@ -159,15 +155,21 @@ node tools/watch.mjs --room 1234 --save   # 방번호를 아는 경우
 cd cloudflare-v2
 npm install
 npm run types                  # worker-configuration.d.ts 를 만든다 (커밋하지 않는다)
-cp .dev.vars.example .dev.vars # SIGNUP_CODE 를 정한다
+cp .dev.vars.example .dev.vars # MERGE_CLIENT_SECRET 을 넣는다
 npm run db:local               # 로컬 D1 에 스키마 적용
 npm run dev                    # http://localhost:8787
+node tools/fake-neobus.mjs     # 다른 창에서. 로컬에서 선생님으로 들어가려면 필요하다
 ```
+
+로컬에는 진짜 네오버스가 없다. `tools/fake-neobus.mjs` 가 같은 계약만 지키는 대역을 서고,
+`wrangler.jsonc` 의 `NEOBUS_ORIGIN` 을 `http://127.0.0.1:8798` 로 두면 [선생님] 버튼이 그대로 돈다.
+`/merge/authorize?...&who=admin` 처럼 `who` 를 붙이면 최고관리자·학생·승인 대기도 흉내 낼 수 있다.
+**이 주소를 실서버 설정에 넣지 않는다.**
 
 ```bash
 npm test                       # 자동 테스트 200개
 npm run check                  # 타입 + 배포 예행
-SIGNUP_CODE=... npm run play   # 실제로 한 판 해 본다 (사람 없이)
+npm run play                   # 실제로 한 판 해 본다 (사람 없이)
 ```
 
 `npm run play` 는 브라우저가 하는 그대로 WebSocket 으로 붙어 한 판을 끝까지 한다.
@@ -279,7 +281,7 @@ node tools/watchauto-check.mjs  # 그물이 끊겨도 감시 런처가 사는가
 
 ```bash
 npx wrangler d1 migrations apply treasure --remote   # --remote 를 빼먹기 쉽다
-printf '가입코드' | npx wrangler secret put SIGNUP_CODE
+printf '시크릿' | npx wrangler secret put MERGE_CLIENT_SECRET
 npx wrangler deploy
 ```
 
@@ -290,7 +292,8 @@ npx wrangler deploy
 ```
 cloudflare-v2/
   src/index.ts       라우터. 쿠키 → teacherId 경계도 여기서
-  src/auth.ts        가입 · 로그인 · 세션
+  src/auth.ts        네오버스 로그인 · 세션 · 권한
+  src/neobus.ts      네오버스와의 서버 간 통신(PKCE · 토큰 · /me · revoke)
   src/quizsets.ts    퀴즈 보관함 (모든 조회에 teacher_id 조건)
   src/rooms.ts       방 개설 — D1 예약이 먼저, DO 초기화가 나중
   src/room.ts        RoomDO — 방 하나가 곧 서버 하나
@@ -298,7 +301,7 @@ cloudflare-v2/
   src/quiz.ts        문항 파서   src/xlsx.ts  엑셀 읽기 (라이브러리 없음)
   src/diagnose.ts    시스템 점검
   src/admin.ts       관제 — 여기서만 teacher_id 경계를 넘는다.
-                     읽기 전용이고, 쓰기는 비밀번호 재설정 하나뿐
+                     읽기 전용이다. 쓰는 길은 없다
   src/sweep.ts       어제 방·두 달 지난 기록 청소
   public/            화면. net.js 가 연결·재연결·폴백을 맡는다
   public/assets/fx/  3D 그림 8장(webp). 원본 PNG 는 img/ 에 둔다

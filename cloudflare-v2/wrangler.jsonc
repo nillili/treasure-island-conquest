@@ -10,7 +10,18 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     // /api/* 는 정적 자산보다 Worker 가 먼저 본다. 이게 없으면 라우터에 도달하지 못한다.
-    "run_worker_first": ["/api/*"]
+    // /auth/* 는 네오버스 로그인이 지나가는 길이다. 정적 자산이 먼저 잡으면 콜백이 사라진다.
+    "run_worker_first": ["/api/*", "/auth/*"]
+  },
+
+  // 네오버스 SSO. 로컬 개발에서는 .dev.vars 가 이 값을 덮어쓴다(가짜 네오버스를 가리킨다).
+  // 세 값은 비밀이 아니다. MERGE_CLIENT_SECRET 만 `wrangler secret put` 과 .dev.vars 로 넣는다.
+  // 네오버스 쪽에는 같은 client_id 로 MERGE_CLIENTS 시크릿에 등록돼 있어야 한다
+  // (name · secret · uris). 콜백 주소는 한 글자도 다르면 안 된다.
+  "vars": {
+    "NEOBUS_ORIGIN": "https://neobus.org",
+    "MERGE_CLIENT_ID": "treasure-island-v2",
+    "MERGE_REDIRECT_URI": "https://treasure-island-v2.ds1lph.workers.dev/auth/callback"
   },
 
   "durable_objects": {

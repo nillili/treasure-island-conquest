@@ -1,19 +1,14 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { loginAs } from "./sso";
 import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
 import { startOfTodayKST } from "../src/sweep";
 
-const CODE = "테스트가입코드";
 const BASE = "https://t.test";
 
+/** 옛 이름 그대로 둔다 — 안이 네오버스 로그인으로 바뀌었을 뿐이다. */
 async function signupOk(id: string) {
-  const res = await SELF.fetch(`${BASE}/api/auth/signup`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: CODE, id, name: "선생", password: "pw1234" }),
-  });
-  if (res.status !== 200) throw new Error(`가입 실패(${res.status}): ${await res.text()}`);
-  return (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+  return loginAs(id);
 }
 
 async function uploadQuiz(cookie: string, title: string) {
@@ -211,12 +206,8 @@ describe("퀴즈 사본", () => {
  * 그래서 "누가 들어왔을 때 실제로 치워졌는가"를 확인한다.
  */
 describe("어제 방 자동 청소", () => {
-  const login = (id: string) =>
-    SELF.fetch(`${BASE}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, password: "pw1234" }),
-    });
+  // 청소는 "선생님이 들어오는 순간" 에 돈다. 그 순간을 네오버스 로그인으로 만든다.
+  const login = (id: string) => loginAs(id);
 
   /** 방을 하나 만들고 방번호를 돌려준다. */
   async function openRoom(who: string) {

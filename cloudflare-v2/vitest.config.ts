@@ -17,9 +17,24 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
+        // 테스트 워커가 바깥으로 보내는 fetch 는 전부 가짜 네오버스로 간다.
+        // 진짜 네오버스를 부르는 테스트는 하나도 없어야 한다.
+        outboundService: "neobus-fake",
+        workers: [
+          {
+            name: "neobus-fake",
+            modules: [
+              { type: "ESModule", path: "index.mjs", contents: readFileSync(here("./test/neobus-fake.js"), "utf8") },
+            ],
+          },
+        ],
         bindings: {
           TEST_MIGRATIONS: migrations,
-          SIGNUP_CODE: "테스트가입코드",
+          // 네오버스 SSO — 값은 가짜지만 형식은 실제와 같다.
+          NEOBUS_ORIGIN: "https://neobus.test",
+          MERGE_CLIENT_ID: "treasure-island-v2",
+          MERGE_CLIENT_SECRET: "테스트시크릿",
+          MERGE_REDIRECT_URI: "https://t.test/auth/callback",
           // 선생님이 실제로 쓰는 파일. 골든 기준이다.
           FIXTURE_XLSX: base64("../sample/보물섬점령전_DB.xlsx"),
           // 같은 파일의 정리 전 모습(퀴즈 + 숨긴 탭 2개). 시트 고르기를 확인한다.

@@ -119,4 +119,8 @@ export const ERROR_CODES = {
   noAttempt: "no-attempt",
   roomFull: "room-full",
   conflict: "action-conflict",
+  // 선생님 자리가 풀렸다. 다시 로그인해야 한다.
+  noSession: "no-session",
+  // 네오버스에 못 물었다. 자격이 없어진 것과 다르므로 화면도 다르게 말해야 한다.
+  neobusDown: "neobus-down",
 } as const;

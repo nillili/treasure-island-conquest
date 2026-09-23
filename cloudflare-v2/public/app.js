@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-23a";
+const APP_BUILD = "2026-09-24a";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -672,6 +672,19 @@ function onError(msg) {
   if (APP.mode === "solving") { APP.mode = "waiting"; hideQuiz(); }
   APP.submitting = false;
 
+  // 선생님 자리가 풀렸다. 다시 붙어 봐야 같은 답이 온다 — 네오버스로 보낸다.
+  if (msg.code === "no-session") {
+    netClose();
+    toast(msg.msg);
+    if (APP.role === "teacher") setTimeout(() => { location.href = "/auth/start"; }, 1200);
+    return;
+  }
+  // 네오버스가 잠깐 안 되는 것이다. 연결을 끊지 않는다 — 학생들은 그대로 하고 있다.
+  if (msg.code === "neobus-down") {
+    toast(msg.msg);
+    return;
+  }
+
   // 붙지 못하는 이유라면 빈 화면에 갇히지 않게 돌려보낸다.
   if (msg.code === "not-owner" || msg.code === "no-room") {
     netClose();
@@ -1166,7 +1179,8 @@ document.addEventListener("click", async (event) => {
     return openModal("student-login");
   }
   if (t.closest("#go-teacher")) {
-    try { await loadHome(); } catch { openModal("teacher-login"); }
+    // 이 앱에는 로그인 화면이 없다. 이미 들어와 있으면 홈으로, 아니면 네오버스로 보낸다.
+    try { await loadHome(); } catch { location.href = "/auth/start"; }
     return;
   }
 
@@ -1219,12 +1233,6 @@ document.addEventListener("click", async (event) => {
     await fetch("/api/auth/logout", { method: "POST" });
     return showScreen("entry");
   }
-  if (t.closest("#toggle-signup")) {
-    const on = $("signup-fields").classList.toggle("hidden");
-    $("teacher-submit").textContent = on ? "로그인" : "가입하기";
-    $("toggle-signup").textContent = on ? "가입하기" : "로그인으로";
-    return;
-  }
   if (t.closest("#upload-open")) {
     $("upload-problems").classList.add("hidden");
     return openModal("upload-modal");
@@ -1232,9 +1240,6 @@ document.addEventListener("click", async (event) => {
 
   if (t.closest("#super-open")) return openSuper();
   if (t.closest("#super-refresh")) return openSuper();
-  // 재설정 버튼은 선생님 줄 안에 있다. 줄보다 먼저 잡아야 줄이 접히지 않는다.
-  const resetBtn = t.closest("[data-reset]");
-  if (resetBtn) return resetTeacherPassword(resetBtn.dataset.reset);
   const teacherRow = t.closest("[data-teacher]");
   if (teacherRow) return toggleTeacher(teacherRow.dataset.teacher);
   const quizBtn = t.closest("[data-quiz]");
@@ -1283,24 +1288,6 @@ $("student-form").addEventListener("submit", async (e) => {
   } catch (err) {
     $("room-hint").textContent = err.message;
     $("room-hint").classList.remove("hidden");
-  }
-});
-
-$("teacher-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const signup = !$("signup-fields").classList.contains("hidden");
-  const body = { id: $("in-id").value.trim(), password: $("in-pw").value };
-  if (signup) { body.name = $("in-teacher-name").value.trim(); body.code = $("in-signup-code").value.trim(); }
-  try {
-    await api(`/api/auth/${signup ? "signup" : "login"}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    closeModal("teacher-login");
-    await loadHome();
-  } catch (err) {
-    toast(err.message);
   }
 });
 
@@ -1617,44 +1604,7 @@ async function supDetail(id) {
     ${quizzes}
     <h3 style="margin-top:12px">🎮 지난 수업 (${d.games.length})</h3>
     ${supGames(d.games, false)}
-    <h3 style="margin-top:12px">🔑 비밀번호</h3>
-    <div class="sup-reset">
-      <span>잊어버렸다고 하면 새로 정해 줄 수 있습니다. 옛 비밀번호는 아무도 알 수 없습니다.</span>
-      <button class="button muted" data-reset="${esc(d.teacher.id)}">비밀번호 재설정</button>
-    </div>
   </div>`;
-}
-
-/**
- * 남의 비밀번호를 새로 정해 준다. 관제에서 유일하게 남의 것을 바꾸는 자리라,
- * 실수로 눌리지 않게 한 번 되묻고 결과를 크게 보여 준다.
- */
-async function resetTeacherPassword(id) {
-  const 직접 = prompt(
-    `${id} 선생님의 비밀번호를 새로 정합니다.\n\n` +
-      "· 새 비밀번호를 적으면 그것으로 바뀝니다\n" +
-      "· 비워 두고 확인을 누르면 임시 비밀번호를 지어 드립니다\n" +
-      "· 그 선생님은 지금 열려 있는 화면에서 모두 로그아웃됩니다",
-    "",
-  );
-  if (직접 === null) return; // 취소
-
-  try {
-    const out = await api(`/api/admin/teachers/${encodeURIComponent(id)}/password`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password: 직접.trim() }),
-    });
-    showInfo(
-      "🔑 비밀번호를 새로 정했습니다",
-      `<p><b>${esc(id)}</b> 선생님의 새 비밀번호입니다. <b>이 창을 닫으면 다시 볼 수 없습니다.</b></p>
-       <div class="sup-newpw">${esc(out.password)}</div>
-       <div class="warning">그 선생님은 열려 있던 화면에서 모두 로그아웃되었습니다.
-         ${id === APP.teacher?.id ? "<b>본인 계정이므로 나가기 후 다시 로그인해야 합니다.</b>" : ""}</div>`,
-    );
-  } catch (err) {
-    toast(err.message);
-  }
 }
 
 async function previewOtherQuiz(id) {
@@ -1677,6 +1627,8 @@ async function previewOtherQuiz(id) {
 
 // 새로고침해도 하던 자리로 돌아온다.
 (async () => {
+  // 네오버스에서 막 돌아온 길이면 주소에 ?teacher=1 이 붙어 있다. 흔적을 지운다.
+  if (location.search.includes("teacher=1")) history.replaceState(null, "", "/");
   try {
     await loadHome();
   } catch {

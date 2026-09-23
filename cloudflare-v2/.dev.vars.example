@@ -1,8 +1,11 @@
 # 이 파일을 .dev.vars 로 복사해서 쓴다. .dev.vars 는 절대 커밋하지 않는다.
-# 선생님들이 가입할 때 입력하는 공용 코드.
-SIGNUP_CODE=여기에-가입코드
 
-# 수업 중 감시 도구(tools/watch.mjs)가 쓰는 선생님 계정.
-# 비밀번호를 명령줄에 적으면 셸 기록에 남으므로 여기에 둔다.
-WATCH_ID=선생님아이디
-WATCH_PW=선생님비밀번호
+# 네오버스 SSO — 보물섬 전용 클라이언트 시크릿. 네오버스 쪽 등록 값과 같아야 한다.
+# 나머지 값(NEOBUS_ORIGIN · MERGE_CLIENT_ID · MERGE_REDIRECT_URI)은 비밀이 아니므로
+# wrangler.jsonc 의 vars 에 둔다.
+MERGE_CLIENT_SECRET=여기에-시크릿
+
+# 로컬 개발용 — tools/fake-neobus.mjs 를 가리킨다(실서버 값은 wrangler.jsonc 의 vars).
+NEOBUS_ORIGIN=http://127.0.0.1:8798
+MERGE_CLIENT_ID=treasure-island-v2
+MERGE_REDIRECT_URI=http://127.0.0.1:8799/auth/callback

@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { verifySessionHash } from "./auth";
 import {
   type CellType,
   type Owner,
@@ -34,6 +35,15 @@ import {
 } from "./protocol";
 import { loadQuizSet } from "./quizsets";
 import { SCHEMA } from "./schema";
+
+/**
+ * 조용한 선생님 소켓을 다시 확인하는 주기.
+ *
+ * 선생님이 아무것도 누르지 않아도 방송은 계속 간다. 그 방송에는 정답이 들어 있다.
+ * 그래서 "명령이 올 때 확인"만으로는 부족하고, 가만히 있는 연결도 주기적으로 본다.
+ * 네오버스 로그아웃이 이 앱에 즉시 전해지지는 않는다 — 최대 이만큼 늦는다.
+ */
+const AUTH_CHECK_MS = 30 * 1000;
 
 const IDLE_MS = 3 * 60 * 60 * 1000; // 마지막 활동 후 3시간이면 방을 닫는다
 const TURN_DEBOUNCE_MS = 2000; // [다음 턴] 연타 방지
@@ -147,6 +157,8 @@ interface Attach {
   role: "student" | "teacher" | null;
   playerId?: string;
   teacherAtUpgrade: string | null;
+  /** 선생님 세션 쿠키의 해시. 명령마다 "지금도 로그인돼 있나"를 되묻는 열쇠다. */
+  teacherSession?: string | null;
 }
 
 /** 요청자에게 돌려줄 것과 방 전체에 뿌릴 것. */
@@ -702,12 +714,28 @@ export class RoomDO extends DurableObject<Env> {
    * 그래서 "지금 다음에 할 일"을 매번 계산해 하나로 건다.
    * 게임 중이면 턴 마감, 아니면 3시간 뒤 방 정리.
    */
-  private nextDeadline(): number {
+  private baseDeadline(): number {
     const room = this.room();
     if (!room) return Date.now() + IDLE_MS;
     return room.status === "running" && room.turn_ends_at
       ? room.turn_ends_at
       : room.last_active_at + IDLE_MS;
+  }
+
+  private hasTeacherSocket(): boolean {
+    for (const ws of this.ctx.getWebSockets()) {
+      if ((ws.deserializeAttachment() as Attach | null)?.role === "teacher") return true;
+    }
+    return false;
+  }
+
+  /**
+   * 알람은 DO 당 하나다. 턴 마감·방 정리·인증 확인 중 **가장 이른 것**에 건다.
+   * 둘을 따로 걸면 나중에 건 쪽이 앞엣것을 지워서, 그 방의 시계가 통째로 멈춘다.
+   */
+  private nextDeadline(): number {
+    const base = this.baseDeadline();
+    return this.hasTeacherSocket() ? Math.min(base, Date.now() + AUTH_CHECK_MS) : base;
   }
 
   private async reschedule(): Promise<void> {
@@ -718,10 +746,14 @@ export class RoomDO extends DurableObject<Env> {
     const room = this.room();
     if (!room) return;
 
-    const due = this.nextDeadline();
+    // 깰 때마다 먼저 한다. 늦게 알면 의미가 없는 확인이다.
+    await this.dropStaleTeachers();
+
+    const due = this.baseDeadline();
     if (Date.now() < due - 500) {
       // 이르게 깨어났다. 알람이 재시도로 두 번 도는 경우를 여기서 막는다.
-      await this.ctx.storage.setAlarm(due);
+      // 아직 턴도 정리도 아니면, 다음 확인 시각에 다시 건다.
+      await this.reschedule();
       return;
     }
 
@@ -1638,6 +1670,9 @@ export class RoomDO extends DurableObject<Env> {
    * 같은 actionId 가 다시 오면 상태를 바꾸지 않고 저장해 둔 답을 그대로 돌려준다.
    */
   async handleAction(msg: ClientMessage, actor: Attach): Promise<ActionResult> {
+    // 선생님 쪽으로 나가는 것에는 정답이 들어 있다. 보내기 전에 매번 자격부터 본다.
+    if (actor.role === "teacher") await this.requireLiveTeacher(actor);
+
     if (msg.t === "sync") {
       const me = actor.playerId ? (this.player(actor.playerId) ?? null) : null;
       return { reply: this.stateMessage(actor.role === "teacher", me) };
@@ -1707,13 +1742,15 @@ export class RoomDO extends DurableObject<Env> {
 
     const url = new URL(request.url);
     const teacherAtUpgrade = request.headers.get("x-teacher-id") || null;
+    const teacherSession = request.headers.get("x-teacher-session") || null;
+    const teacherAuth = request.headers.get("x-teacher-auth") || "none";
 
     if (url.pathname.endsWith("/ws")) {
       const pair = new WebSocketPair();
       // accept() 가 아니라 acceptWebSocket() 이다. 그래야 방이 조용할 때 DO 가 잠든다.
       this.ctx.acceptWebSocket(pair[1]);
       // Hibernation 중에는 메모리가 통째로 날아간다. 소켓에 붙여 두면 깨어난 뒤에도 남는다.
-      pair[1].serializeAttachment({ role: null, teacherAtUpgrade } satisfies Attach);
+      pair[1].serializeAttachment({ role: null, teacherAtUpgrade, teacherSession } satisfies Attach);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -1728,11 +1765,15 @@ export class RoomDO extends DurableObject<Env> {
       // 입장도 폴백으로 할 수 있어야 한다. 학교 방화벽이 WebSocket 을 막으면
       // 이 길밖에 없는데, 여기로 못 들어오면 그 학생은 수업에서 통째로 빠진다.
       if (body.t === "hello") {
+        if (body.role === "teacher") {
+          if (!teacherAtUpgrade) this.refuseTeacher(teacherAuth);
+          await this.requireLiveTeacher({ role: "teacher", teacherAtUpgrade, teacherSession });
+        }
         const out = this.helloAny(body, teacherAtUpgrade);
         if (out.broadcast) this.broadcast(out.broadcast);
         return Response.json({ ok: true, reply: out.reply });
       }
-      const actor = await this.actorFor(body, teacherAtUpgrade);
+      const actor = await this.actorFor(body, teacherAtUpgrade, teacherSession, teacherAuth);
       const out = await this.handleAction(body, actor);
       if (out.broadcastState) this.broadcastState();
       else if (out.broadcast) this.broadcast(out.broadcast);
@@ -1749,14 +1790,82 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   /** 폴백 요청에는 소켓이 없으므로 매번 누구인지 정한다. */
-  private async actorFor(body: ClientMessage & { playerId?: string }, teacherAtUpgrade: string | null): Promise<Attach> {
+  private async actorFor(
+    body: ClientMessage & { playerId?: string },
+    teacherAtUpgrade: string | null,
+    teacherSession: string | null,
+    teacherAuth: string,
+  ): Promise<Attach> {
     const room = this.needRoom();
     if (teacherAtUpgrade && teacherAtUpgrade === room.teacher_id) {
-      return { role: "teacher", teacherAtUpgrade };
+      return { role: "teacher", teacherAtUpgrade, teacherSession };
     }
     const playerId = body.playerId;
     if (playerId && this.player(playerId)) return { role: "student", playerId, teacherAtUpgrade: null };
+    // 학생도 아니고 선생님도 아닌데 선생님 전용 메시지가 왔다. 왜 아닌지를 알려 준다.
+    // 들어와 있는 학생은 위에서 이미 걸렀다 — 남의 쿠키가 남아 있어도 그대로 지나간다.
+    if (body.t === "cmd" || body.t === "peek") this.refuseTeacher(teacherAuth);
     throw new Refused(E.needHello, "먼저 입장해 주세요.");
+  }
+
+  /**
+   * 선생님 명령을 처리하기 **직전에** 그 세션이 아직 살아 있는지 되묻는다.
+   *
+   * 업그레이드 때 한 번 확인한 값을 계속 믿으면, 네오버스에서 로그아웃하거나 승인이
+   * 취소된 뒤에도 열려 있던 창으로 계속 방을 움직일 수 있다.
+   * 같은 선생님의 다른 세션이 살아 있다는 이유로 폐기된 세션을 통과시키지 않는다.
+   */
+  /** 선생님 자리를 내주지 못하는 이유를 그대로 말한다. 화면이 다음 할 일을 정할 수 있어야 한다. */
+  private refuseTeacher(teacherAuth: string): never {
+    if (teacherAuth === "temp") {
+      throw new Refused(E.neobusDown, "네오버스에 연결하지 못했습니다. 잠시 뒤 다시 해 주세요.");
+    }
+    if (teacherAuth === "stale") {
+      throw new Refused(E.noSession, "선생님 로그인이 풀렸습니다. 다시 로그인해 주세요.");
+    }
+    throw new Refused(E.needHello, "먼저 입장해 주세요.");
+  }
+
+  private async requireLiveTeacher(actor: Attach): Promise<void> {
+    const verdict = await verifySessionHash(this.env, actor.teacherSession ?? null);
+    // 여기서 보는 것은 "아직 로그인돼 있나" 하나다. 이 방의 주인인지는 원래 하던 자리에서
+    // 따로 본다 — 남의 방에 붙으려는 사람에게 "로그인이 풀렸다" 고 하면 거짓말이 된다.
+    if (verdict.ok && verdict.teacherId === actor.teacherAtUpgrade) return;
+    if (!verdict.ok && verdict.reason === "temp") {
+      // 네오버스가 잠깐 안 되는 것이다. 로그아웃으로 바꾸지 않는다.
+      throw new Refused(E.neobusDown, "네오버스에 연결하지 못했습니다. 잠시 뒤 다시 해 주세요.");
+    }
+    throw new Refused(E.noSession, "선생님 로그인이 풀렸습니다. 다시 로그인해 주세요.");
+  }
+
+  /**
+   * 조용히 열려 있는 선생님 소켓도 확인한다. 아무것도 누르지 않아도 방송은 가고,
+   * 그 방송에는 정답이 들어 있다. 자격이 없어졌으면 그 자리에서 끊는다.
+   * 네오버스가 잠깐 안 되는 것으로는 끊지 않는다 — 학생 수업을 그것 때문에 흔들지 않는다.
+   */
+  private async dropStaleTeachers(): Promise<void> {
+    const room = this.room();
+    if (!room) return;
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as Attach | null;
+      if (att?.role !== "teacher") continue;
+      const verdict = await verifySessionHash(this.env, att.teacherSession ?? null);
+      if (verdict.ok && verdict.teacherId === room.teacher_id) continue;
+      if (!verdict.ok && verdict.reason === "temp") continue;
+      try {
+        ws.send(
+          JSON.stringify({
+            t: "error",
+            code: E.noSession,
+            msg: "선생님 로그인이 풀렸습니다. 다시 로그인해 주세요.",
+            serverNow: Date.now(),
+          }),
+        );
+        ws.close(4401, "로그인이 풀렸습니다.");
+      } catch {
+        /* 이미 닫힌 소켓 */
+      }
+    }
   }
 
   private errorPayload(err: unknown): unknown {
@@ -1774,7 +1883,11 @@ export class RoomDO extends DurableObject<Env> {
       return;
     }
 
-    const att = (ws.deserializeAttachment() as Attach | null) ?? { role: null, teacherAtUpgrade: null };
+    const att = (ws.deserializeAttachment() as Attach | null) ?? {
+      role: null,
+      teacherAtUpgrade: null,
+      teacherSession: null,
+    };
 
     try {
       if (msg.t === "hello") {
@@ -1850,12 +1963,17 @@ export class RoomDO extends DurableObject<Env> {
     msg: ClientMessage & { t: "hello" },
     att: Attach,
   ): Promise<ActionResult> {
+    if (msg.role === "teacher") await this.requireLiveTeacher(att);
     const out = this.helloAny(msg, att.teacherAtUpgrade, ws);
     // Hibernation 중에는 메모리가 날아간다. 누구인지는 소켓에 붙여 둬야 살아남는다.
     ws.serializeAttachment(
       out.me
-        ? ({ role: "student", playerId: out.me.id, teacherAtUpgrade: null } satisfies Attach)
-        : ({ role: "teacher", teacherAtUpgrade: att.teacherAtUpgrade } satisfies Attach),
+        ? ({ role: "student", playerId: out.me.id, teacherAtUpgrade: null, teacherSession: null } satisfies Attach)
+        : ({
+            role: "teacher",
+            teacherAtUpgrade: att.teacherAtUpgrade,
+            teacherSession: att.teacherSession ?? null,
+          } satisfies Attach),
     );
     await this.reschedule();
     return { reply: out.reply, broadcast: out.broadcast };

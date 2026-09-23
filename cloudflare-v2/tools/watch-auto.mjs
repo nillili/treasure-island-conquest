@@ -15,25 +15,15 @@
  * 두 번째가 있어야 "그 수업 기록이 왜 없지?"를 나중에 되짚을 수 있다.
  * Ctrl+C 로 끝낸다.
  */
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { NEED_LOGIN, teacherCookie } from "./session.mjs";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 // 평소에는 실서버를 본다. 검사 도구는 WATCH_BASE 로 가짜 서버를 물린다.
 const BASE = process.env.WATCH_BASE || "https://treasure-island-v2.ds1lph.workers.dev";
 const POLL_MS = 5000;
-const devVars = (key) => {
-  try {
-    const text = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8");
-    const line = text.split(/\r?\n/).find((l) => l.trim().startsWith(`${key}=`));
-    return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "") : "";
-  } catch {
-    return "";
-  }
-};
 
-const ID = process.env.WATCH_ID || devVars("WATCH_ID");
-const PW = process.env.WATCH_PW || devVars("WATCH_PW");
 
 mkdirSync(new URL("../logs", import.meta.url), { recursive: true });
 const selfLog = fileURLToPath(new URL("../logs/watch-auto.txt", import.meta.url));
@@ -47,21 +37,15 @@ function say(line) {
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 /**
- * 세션은 언젠가 만료된다. 하루 종일 켜 두는 도구라 다시 로그인할 수 있어야 한다.
+ * 선생님 자격을 다시 얻는다.
  *
- * 노트북 무선이 잠깐 끊기면 fetch 는 예외를 던진다. 예전에는 그 예외가 그대로 위로
- * 올라가 런처를 죽였다 — 2026-09-01 하루에만 79번 죽고 되살아났다. 끊김은 늘 있는
- * 일이므로 여기서 삼키고 빈 문자열로 돌려준다. 다음 차례에 다시 걸어 보면 된다.
+ * 몰래 다시 로그인하는 길은 없다 — 그런 길이 있으면 그게 곧 뒷문이다.
+ * 대신 쿠키 파일을 다시 읽는다. 세션이 끝났으면 사람이 브라우저에서 다시 로그인해
+ * 그 파일을 새로 적어 주면, 이 런처는 죽지 않고 그대로 이어서 돈다.
  */
 async function login() {
   try {
-    const res = await fetch(`${BASE}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: ID, password: PW }),
-    });
-    if (!res.ok) return "";
-    return (res.headers.get("set-cookie") ?? "").split(";")[0];
+    return await teacherCookie(BASE, { quiet: true });
   } catch {
     return "";
   }
@@ -74,7 +58,7 @@ for (let tries = 0; !cookie && tries < 12; tries += 1) {
   cookie = await login();
 }
 if (!cookie) {
-  console.error("로그인 실패 — 그물이 끊겼거나 .dev.vars 의 WATCH_ID · WATCH_PW 가 틀립니다.");
+  console.error(NEED_LOGIN);
   process.exit(1);
 }
 
@@ -114,7 +98,7 @@ async function findRoom() {
     relogins += 1;
     if (Date.now() - relogSaidAt > 600000) {
       relogSaidAt = Date.now();
-      say(`잠깐 끊겨 다시 로그인했습니다 (오늘 ${relogins}번째).`);
+      say(`잠깐 끊겨 쿠키를 다시 읽었습니다 (오늘 ${relogins}번째).`);
     }
     return null;
   }

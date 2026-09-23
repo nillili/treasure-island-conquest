@@ -1,7 +1,10 @@
 /**
  * 실제로 한 판을 끝까지 해 본다 — 선생님 하나, 학생 여럿, WebSocket 으로.
  *
- *   SIGNUP_CODE=가입코드 node tools/playtest.mjs [--base 주소] [--students 6] [--rounds 4]
+ *   node tools/playtest.mjs [--base 주소] [--students 6] [--rounds 4]
+ *
+ * 선생님 자격은 tools/session.mjs 가 구해 온다 — 로컬이면 가짜 네오버스로 왕복하고,
+ * 실서버면 .teacher.cookie 를 읽는다. 이 도구가 계정을 새로 만들지는 않는다.
  *
  * 화면 없이 브라우저가 하는 그대로 한다. 확인하는 것:
  *   · 한 명이 정답을 내면 다른 학생 화면이 즉시 바뀌는가(방송)
@@ -9,6 +12,8 @@
  *   · 같은 요청을 두 번 보내도 점수가 한 번만 오르는가
  *   · stateRev 가 건너뛰지 않는가
  */
+import { NEED_LOGIN, teacherCookie } from "./session.mjs";
+
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
   return i > 0 ? process.argv[i + 1] : fallback;
@@ -181,18 +186,12 @@ async function main() {
   const csv = await (await fetch(`${BASE}/`)).text().then(() => null).catch(() => null);
   void csv;
 
-  console.log("① 선생님 가입 · 퀴즈 올리기");
-  const id = `play${Math.random().toString(36).slice(2, 7)}`;
-  const signupCode = process.env.SIGNUP_CODE ?? arg("code", "");
-  if (!signupCode) {
-    console.error("가입 코드가 필요합니다: SIGNUP_CODE=... 또는 --code ...");
+  console.log("① 선생님 자격 얻기 · 퀴즈 올리기");
+  cookie = await teacherCookie(BASE);
+  if (!cookie) {
+    console.error(NEED_LOGIN);
     process.exit(1);
   }
-  await http("/api/auth/signup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: signupCode, id, name: "김선생", password: "pw1234" }),
-  });
 
   const { readFileSync } = await import("node:fs");
   const buf = readFileSync(new URL("../../sample/보물섬점령전_DB.xlsx", import.meta.url));

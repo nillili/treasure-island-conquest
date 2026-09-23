@@ -14,7 +14,8 @@
  *
  * Ctrl+C 로 끝낸다.
  */
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { NEED_LOGIN, teacherCookie } from "./session.mjs";
 import { fileURLToPath } from "node:url";
 
 const arg = (name, fallback) => {
@@ -23,32 +24,13 @@ const arg = (name, fallback) => {
 };
 const has = (name) => process.argv.includes(`--${name}`);
 
-/**
- * 계정은 .dev.vars 에서 읽는다(이 파일은 저장소에 안 올라간다).
- * 비밀번호를 명령줄에 적으면 셸 기록과 화면에 그대로 남는다.
- *
- *   WATCH_ID=내아이디
- *   WATCH_PW=내비밀번호
- */
-function fromDevVars(key) {
-  try {
-    const text = readFileSync(new URL("../.dev.vars", import.meta.url), "utf8");
-    const line = text.split(/\r?\n/).find((l) => l.trim().startsWith(`${key}=`));
-    return line ? line.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "") : "";
-  } catch {
-    return "";
-  }
-}
-
 const BASE = arg("base", "https://treasure-island-v2.ds1lph.workers.dev");
 const ROOM = arg("room", "");
-const ID = arg("id", "") || process.env.WATCH_ID || fromDevVars("WATCH_ID");
-const PW = arg("pw", "") || process.env.WATCH_PW || fromDevVars("WATCH_PW");
 const SAVE = has("save") || !!arg("every", "");
 
-if (!ROOM || !ID || !PW) {
+if (!ROOM) {
   console.log("사용법: node tools/watch.mjs --room 1234 [--base 주소] [--every 5] [--save]");
-  console.log("계정은 cloudflare-v2/.dev.vars 의 WATCH_ID · WATCH_PW 에서 읽습니다.");
+  console.log("선생님 자격은 cloudflare-v2/.teacher.cookie 에서 읽습니다.");
   console.log("(--id · --pw 로 직접 줄 수도 있지만 셸 기록에 남습니다)");
   process.exit(1);
 }
@@ -73,18 +55,13 @@ const pad = (s, n) => {
 const clock = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour12: false });
 const ago = (ms) => (ms < 60000 ? `${Math.floor(ms / 1000)}초` : `${Math.floor(ms / 60000)}분${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}초`);
 
-// ── 로그인 ────────────────────────────────────────────────────────────────
-let cookie = "";
-const res = await fetch(`${BASE}/api/auth/login`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ id: ID, password: PW }),
-});
-if (!res.ok) {
-  console.error(`로그인 실패: ${(await res.json().catch(() => ({}))).error ?? res.status}`);
+// ── 선생님 자격 ──────────────────────────────────────────────────────────
+// 네오버스 로그인은 브라우저에서만 한다. 이 도구는 그 결과(앱 쿠키)만 건네받는다.
+const cookie = await teacherCookie(BASE);
+if (!cookie) {
+  console.error(NEED_LOGIN);
   process.exit(1);
 }
-cookie = (res.headers.get("set-cookie") ?? "").split(";")[0];
 
 const check = await (await fetch(`${BASE}/api/rooms/${ROOM}`)).json();
 if (!check.exists) {

@@ -1,18 +1,13 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { loginAs } from "./sso";
 import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
 
-const CODE = "테스트가입코드";
 const BASE = "https://t.test";
 
+/** 옛 이름 그대로 둔다 — 안이 네오버스 로그인으로 바뀌었을 뿐이다. */
 async function signupOk(id: string) {
-  const res = await SELF.fetch(`${BASE}/api/auth/signup`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: CODE, id, name: "선생", password: "pw1234" }),
-  });
-  if (res.status !== 200) throw new Error(`가입 실패(${res.status}): ${await res.text()}`);
-  return (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+  return loginAs(id);
 }
 
 function xlsxBytes(): ArrayBuffer {

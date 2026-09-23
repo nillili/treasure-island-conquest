@@ -8,7 +8,7 @@
  * 그리고 (teacher_id, create_request_id) 가 UNIQUE 다. 선생님이 [방 만들기]를 두 번 눌러도,
  * 응답이 유실돼 다시 눌러도 같은 방 하나만 생긴다.
  */
-import { requireTeacher, teacherFromCookie } from "./auth";
+import { hasSessionCookie, requireTeacher, sessionHashOf, verifyTeacher } from "./auth";
 import { MAX_SIDE, MIN_SIDE, checkBoardSize } from "./game";
 import { fail, json, readJson, str } from "./http";
 import { loadQuizSet } from "./quizsets";
@@ -249,9 +249,25 @@ export async function handleRooms(request: Request, env: Env, path: string): Pro
 
   // 쿠키는 브라우저가 업그레이드 요청에도 알아서 실어 보낸다. 여기서 확인해 DO 에 넘긴다.
   // 화면 JS 가 HttpOnly 토큰을 읽어 보낼 수는 없기 때문에, 이 자리가 유일한 확인 지점이다.
-  const teacherId = await teacherFromCookie(request, env);
+  // 학생은 선생님 쿠키가 없다. 쿠키가 있는데 확인이 안 되면 그건 선생님 쪽 사정이고,
+  // 무엇 때문인지(끝난 세션인지, 네오버스가 잠깐 안 되는지)를 방에 그대로 알려 준다.
+  // 방은 선생님 전용 메시지에만 이 값을 쓴다 — 학생 요청은 이 값과 무관하게 지나간다.
+  const verdict = await verifyTeacher(request, env);
+  const teacherId = verdict.ok ? verdict.teacherId : null;
+  // 세션 해시도 함께 넘긴다. 방은 이 값으로 "지금도 그 선생님인가"를 명령마다 되묻는다.
+  // 쿠키 원문이 아니라 해시다 — 방이 그 값으로 로그인할 수는 없어야 한다.
+  const sessionHash = teacherId ? await sessionHashOf(request) : null;
+  const auth = verdict.ok
+    ? "ok"
+    : verdict.reason === "temp"
+      ? "temp"
+      : hasSessionCookie(request)
+        ? "stale"
+        : "none";
   const headers = new Headers(request.headers);
   headers.set("x-teacher-id", teacherId ?? ""); // 바깥에서 온 같은 이름 헤더는 여기서 덮인다
+  headers.set("x-teacher-session", sessionHash ?? "");
+  headers.set("x-teacher-auth", auth);
   return env.ROOM.getByName(code).fetch(new Request(request, { headers }));
 }
 

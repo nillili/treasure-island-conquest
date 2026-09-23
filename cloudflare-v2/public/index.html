@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-09-23a">
-<script src="/net.js?v=2026-09-23a" defer></script>
-<script src="/sfx.js?v=2026-09-23a" defer></script>
-<script src="/app.js?v=2026-09-23a" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-09-24a">
+<script src="/net.js?v=2026-09-24a" defer></script>
+<script src="/sfx.js?v=2026-09-24a" defer></script>
+<script src="/app.js?v=2026-09-24a" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -20,7 +20,7 @@
       <span>🙋</span><b>학생 입장</b><small>방번호와 이름을 넣어요</small>
     </button>
     <button class="entry-card" id="go-teacher">
-      <span>🧑‍🏫</span><b>선생님</b><small>퀴즈를 올리고 방을 열어요</small>
+      <span>🧑‍🏫</span><b>선생님</b><small>네오버스로 로그인해요</small>
     </button>
   </div>
 </section>
@@ -37,28 +37,6 @@
     <div class="modal-actions">
       <button type="button" class="button muted" data-close="student-login">닫기</button>
       <button type="submit" class="button primary">들어가기</button>
-    </div>
-  </form>
-</div>
-
-<!-- ③ 선생님 로그인 ---------------------------------------------------- -->
-<div id="teacher-login" class="dim hidden">
-  <form class="modal" id="teacher-form">
-    <h2>선생님 로그인</h2>
-    <div class="field"><label for="in-id">아이디</label>
-      <input class="input" id="in-id" autocomplete="username" required></div>
-    <div class="field"><label for="in-pw">비밀번호</label>
-      <input class="input" id="in-pw" type="password" autocomplete="current-password" required></div>
-    <div id="signup-fields" class="hidden">
-      <div class="field"><label for="in-teacher-name">이름</label>
-        <input class="input" id="in-teacher-name" maxlength="20" placeholder="예: 김선생"></div>
-      <div class="field"><label for="in-signup-code">가입 코드</label>
-        <input class="input" id="in-signup-code" placeholder="학교에서 받은 코드"></div>
-    </div>
-    <div class="modal-actions">
-      <button type="button" class="button muted push" id="toggle-signup">가입하기</button>
-      <button type="button" class="button muted" data-close="teacher-login">닫기</button>
-      <button type="submit" class="button primary" id="teacher-submit">로그인</button>
     </div>
   </form>
 </div>

@@ -1,8 +1,8 @@
 import { SELF, env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { loginAs } from "./sso";
 import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
 
-const CODE = "테스트가입코드";
 const BASE = "https://t.test";
 
 interface StateMsg {
@@ -36,14 +36,9 @@ interface TurnFxMsg {
 let teacherCookie = "";
 let roomCode = "";
 
+/** 옛 이름 그대로 둔다 — 안이 네오버스 로그인으로 바뀌었을 뿐이다. */
 async function signupOk(id: string) {
-  const res = await SELF.fetch(`${BASE}/api/auth/signup`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: CODE, id, name: "선생", password: "pw1234" }),
-  });
-  if (res.status !== 200) throw new Error(`가입 실패: ${await res.text()}`);
-  return (res.headers.get("set-cookie") ?? "").split(";")[0]!;
+  return loginAs(id);
 }
 
 /** 방 하나를 만들고 방번호를 돌려준다. */
@@ -1351,5 +1346,54 @@ describe("팀 다시 나누기", () => {
     const out = await teacherCmd("shuffleteams");
     expect(out.ok).toBeFalsy();
     expect(out.code).toBe("no-player");
+  });
+});
+
+/**
+ * 선생님 자리는 업그레이드 때 한 번 본 것으로 끝나지 않는다.
+ *
+ * 네오버스에서 로그아웃하거나 승인이 취소되면, 열려 있던 선생님 화면도 막혀야 한다.
+ * 그 화면에는 정답이 실려 나가기 때문이다.
+ */
+describe("선생님 자격은 계속 확인한다", () => {
+  it("로그아웃하면 열려 있던 창으로도 명령이 안 먹는다", async () => {
+    expect((await teacherCmd("newgame")).ok).toBe(true);
+
+    await SELF.fetch(`${BASE}/api/auth/logout`, { method: "POST", headers: { cookie: teacherCookie } });
+
+    const out = await teacherCmd("newgame");
+    expect(out.code).toBe("no-session");
+  });
+
+  it("선생님 자격을 잃으면 정답이 더 이상 나가지 않는다", async () => {
+    await teacherCmd("newgame");
+    const before = await rpc({ t: "peek", cell: 0 }, teacherCookie);
+    expect(before.ok).toBe(true);
+
+    // 네오버스에서 학생으로 바뀌었다. 30초 확인 주기도 지나가게 한다.
+    const 학생 = "tok:" + encodeURIComponent(JSON.stringify({
+      user_id: 1, login_id: "owner1", name: "선생", user_type: "학생", approval_status: "approved",
+    }));
+    await env.DB.prepare("UPDATE sessions SET link_token = ?, verified_at = 0").bind(학생).run();
+
+    const after = await rpc({ t: "peek", cell: 0 }, teacherCookie);
+    expect(after.code).toBe("no-session");
+  });
+
+  it("네오버스가 잠깐 안 되면 거절하되 로그아웃시키지는 않는다", async () => {
+    await env.DB.prepare("UPDATE sessions SET link_token = 'tok:down', verified_at = 0").run();
+
+    const out = await teacherCmd("newgame");
+    expect(out.code).toBe("neobus-down");
+
+    // 세션은 그대로다. 네오버스가 돌아오면 이어서 쓴다.
+    const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM sessions").first<{ n: number }>();
+    expect(left!.n).toBe(1);
+  });
+
+  it("학생은 네오버스가 안 되어도 하던 대로 한다", async () => {
+    await env.DB.prepare("UPDATE sessions SET link_token = 'tok:down', verified_at = 0").run();
+    const me = await join("나학생");
+    expect(me.myPlayer).toBeTruthy();
   });
 });

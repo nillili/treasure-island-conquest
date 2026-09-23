@@ -13,7 +13,7 @@
  * 학생 이름은 어디에도 나오지 않는다. game_records 에 애초에 담기지 않는다
  * (migrations/0003, 2026-08-09 결정).
  */
-import { requireSuper, setPassword, tempPassword } from "./auth";
+import { requireSuper } from "./auth";
 import { fail, json } from "./http";
 import type { GameIssue } from "./protocol";
 
@@ -258,43 +258,16 @@ async function quizPreview(env: Env, id: number): Promise<Response> {
   });
 }
 
-/**
- * 비밀번호를 새로 정해 준다. 새 비밀번호를 주면 그것으로, 안 주면 임시 비밀번호를 지어 준다.
- * 지어 준 비밀번호는 **이 응답에서 한 번만** 돌려준다 — 저장해 두지 않으므로 다시 볼 수 없다.
- */
-async function resetPassword(request: Request, env: Env, teacherId: string): Promise<Response> {
-  const body = (await request.json().catch(() => ({}))) as { password?: unknown };
-  const given = typeof body.password === "string" ? body.password.trim() : "";
-  const password = given || tempPassword();
-
-  const problem = await setPassword(env, teacherId, password);
-  if (problem) return fail(problem, given ? 400 : 404);
-
-  return json({
-    ok: true,
-    teacherId,
-    password,
-    // 바꾸는 순간 그 선생님의 열린 세션이 모두 끊긴다. 화면이 이걸 알려 줘야 당황하지 않는다.
-    signedOut: true,
-  });
-}
-
 export async function handleAdmin(request: Request, env: Env, path: string): Promise<Response> {
   const me = await requireSuper(request, env);
   if (me instanceof Response) return me;
 
-  // 쓰기는 여기 하나뿐이다. 이 검사보다 먼저 GET 을 강제하면 재설정이 막힌다.
-  const reset = /^\/api\/admin\/teachers\/([A-Za-z0-9]{4,20})\/password$/.exec(path);
-  if (reset) {
-    if (request.method !== "POST") return fail("POST 로 보내 주세요.", 405);
-    return resetPassword(request, env, reset[1]!);
-  }
-
+  // 2026-09-23 이후 이 화면에 쓰기는 없다. 비밀번호가 없어졌으므로 재설정할 것도 없다.
   if (request.method !== "GET") return fail("GET 으로 보내 주세요.", 405);
 
   if (path === "/api/admin/overview") return overview(env);
 
-  const teacher = /^\/api\/admin\/teachers\/([A-Za-z0-9]{4,20})$/.exec(path);
+  const teacher = /^\/api\/admin\/teachers\/([0-9a-fA-F-]{36})$/.exec(path);
   if (teacher) return teacherDetail(env, teacher[1]!);
 
   const quiz = /^\/api\/admin\/quizsets\/(\d+)$/.exec(path);

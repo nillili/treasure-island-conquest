@@ -23,13 +23,25 @@ const SURVIVE_MS = 14000; // POLL_MS(5초) 를 두 번 넘게 돌아야 findRoom
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 let hits = 0;
+let port = 0;
 const sockets = new Set();
 
 const server = createServer((req, res) => {
   hits += 1;
-  if (req.url?.startsWith("/api/auth/login")) {
-    res.writeHead(200, { "content-type": "application/json", "set-cookie": "sid=fake-check-cookie; Path=/" });
-    res.end(JSON.stringify({ ok: true }));
+  // 네오버스 로그인 왕복을 흉내 낸다. 런처는 이 세 걸음을 그대로 지난다.
+  if (req.url?.startsWith("/auth/start")) {
+    res.writeHead(302, { location: "/fake-authorize", "set-cookie": "tlogin=check-tx; Path=/auth" });
+    res.end();
+    return;
+  }
+  if (req.url?.startsWith("/fake-authorize")) {
+    res.writeHead(302, { location: `http://127.0.0.1:${port}/auth/callback?code=c&state=s` });
+    res.end();
+    return;
+  }
+  if (req.url?.startsWith("/auth/callback")) {
+    res.writeHead(302, { location: "/?teacher=1", "set-cookie": "tsession=check-session; Path=/" });
+    res.end();
     return;
   }
   res.writeHead(200, { "content-type": "application/json" });
@@ -41,7 +53,7 @@ server.on("connection", (s) => {
 });
 
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
-const port = server.address().port;
+port = server.address().port;
 
 const child = spawn(
   process.execPath,
@@ -51,8 +63,6 @@ const child = spawn(
     env: {
       ...process.env,
       WATCH_BASE: `http://127.0.0.1:${port}`,
-      WATCH_ID: "검사용",
-      WATCH_PW: "검사용",
     },
   },
 );
