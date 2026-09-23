@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-11a";
+const APP_BUILD = "2026-09-23a";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -642,6 +642,15 @@ function onMessage(msg) {
       else { localStorage.removeItem("treasure-room"); leave(); }
       return;
     }
+    case "kicked": {
+      // 선생님이 내보냈다. **스스로 다시 들어가지 않는다.** 예전에는 소켓이 끊긴 것으로만
+      // 보여 화면이 곧바로 이름으로 재입장했고, 지운 자리가 되살아나 선생님이 명단을
+      // 정리할 길이 없었다(2026-09-15 방 4788, 14:27~14:28). 이름을 다시 넣어야 들어온다.
+      localStorage.removeItem("treasure-player-id");
+      toast(msg.msg || "선생님이 내보냈어요.");
+      leave(); // netClose() 가 들어 있어 다시 붙지 않는다
+      return;
+    }
     case "gameover":
       showGameOver(msg);
       return;
@@ -1247,6 +1256,7 @@ document.addEventListener("click", async (event) => {
     if (confirm("게임을 끝낼까요? 학생들은 그대로 남아 있습니다.")) teacherCommand("end", "마무리하는 중…");
     return;
   }
+  if (t.closest("#shuffle-teams-button")) return teacherCommand("shuffleteams", "팀을 다시 나누는 중…");
   if (t.closest("#reset-button")) {
     if (confirm("학생 명단까지 모두 비우고 새 판을 깝니다. 다음 반 수업을 시작할 때 쓰는 버튼입니다.\n계속할까요?")) {
       teacherCommand("reset", "초기화하는 중…");

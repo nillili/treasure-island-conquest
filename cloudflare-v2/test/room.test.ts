@@ -83,6 +83,27 @@ async function join(name: string, playerId?: string) {
   return out.reply as StateMsg;
 }
 
+/** 조건이 참이 될 때까지 최대 2초 기다린다. */
+async function waitFor(check: () => boolean) {
+  for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 20));
+  expect(check()).toBe(true);
+}
+
+/** 진짜 WebSocket 으로 붙는다 — 폴백(sync)과 달리 '접속 중' 으로 잡힌다. */
+async function openWs(hello: Record<string, unknown>) {
+  const res = await SELF.fetch(`${BASE}/api/rooms/${roomCode}/ws`, { headers: { Upgrade: "websocket" } });
+  const ws = res.webSocket!;
+  ws.accept();
+  const inbox: { t: string }[] = [];
+  ws.addEventListener("message", (ev) => {
+    if (ev.data === "PONG") return;
+    inbox.push(JSON.parse(ev.data as string) as { t: string });
+  });
+  ws.send(JSON.stringify(hello));
+  await waitFor(() => inbox.some((m) => m.t === "state"));
+  return { ws, inbox };
+}
+
 const teacherCmd = (cmd: string, extra: Record<string, unknown> = {}) =>
   rpc({ t: "cmd", cmd, actionId: crypto.randomUUID(), ...extra }, teacherCookie);
 
@@ -169,6 +190,24 @@ describe("입장", () => {
 
     expect(again.myPlayer!.id).toBe(first.myPlayer!.id);
     expect(again.players).toHaveLength(1);
+    expect(again.players[0]!.name).toBe("수경");
+  });
+
+  it("접속 중으로 보여도 같은 이름이면 그 자리다 — 번호도, 팀 뒤집힘도 없다", async () => {
+    // 2026-09-15 방 4788. 화면만 굳고 소켓은 살아 있는 학생이 다시 들어오자 서버가
+    // "접속 중인 동명이인" 으로 보고 예은2·samasTV2 를 만들었다. 게다가 원본이 명단에
+    // 남아 정원을 차지하므로 새 자리는 반대 팀으로 갔다 — 4명 중 3명이 뒤집혔다.
+    const first = await join("수경");
+
+    // 굳은 화면처럼, 소켓은 붙어 있지만 이 뒤로 아무 말도 하지 않는다.
+    await openWs({ t: "hello", role: "student", playerId: first.myPlayer!.id });
+
+    // 같은 학생이 playerId 를 잃은 채 다시 들어온다(다른 기기·시크릿창·localStorage 없음).
+    const again = await join("수경");
+
+    expect(again.myPlayer!.id).toBe(first.myPlayer!.id); // 같은 자리
+    expect(again.myPlayer!.team).toBe(first.myPlayer!.team); // 같은 팀 — 혼자였으니 새로 만들면 반대 팀이 된다
+    expect(again.players).toHaveLength(1); // 수경2 가 없다
     expect(again.players[0]!.name).toBe("수경");
   });
 
@@ -470,6 +509,17 @@ describe("선생님 명령", () => {
     const state = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
     expect(state.players).toHaveLength(1);
     expect(state.players[0]!.name).toBe("영희");
+  });
+
+  it("내보내면 그 화면에 알린다 — 스스로 다시 들어오지 않게", async () => {
+    // 끊기만 하면 화면이 스스로 다시 붙어 이름으로 재입장한다. 지운 자리가 곧바로 되살아나
+    // 선생님이 명단을 정리할 길이 없었다(2026-09-15 방 4788, 14:27~14:28).
+    const me = await join("민수");
+    const { inbox } = await openWs({ t: "hello", role: "student", playerId: me.myPlayer!.id });
+
+    await teacherCmd("kick", { playerId: me.myPlayer!.id });
+
+    await waitFor(() => inbox.some((m) => m.t === "kicked"));
   });
 
   it("학생은 선생님 명령을 쓸 수 없다", async () => {
@@ -1255,5 +1305,51 @@ describe("끝난 판의 점수는 얼어붙는다 (2026-09-01)", () => {
     const after = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
     expect(after.scores.H.total).toBe(before.h);
     expect(after.scores.C.total).toBe(before.c);
+  });
+});
+
+describe("팀 다시 나누기", () => {
+  it("학생은 그대로 두고 팀만 다시 나눈다", async () => {
+    for (let i = 0; i < 7; i++) await join(`학생${i}`);
+    await teacherCmd("newgame");
+
+    const out = await teacherCmd("shuffleteams");
+    expect(out.ok).toBe(true);
+
+    const state = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+    expect(state.players).toHaveLength(7); // 아무도 쫓겨나지 않는다
+    expect(state.players.map((p) => p.name).sort()).toEqual(
+      ["학생0", "학생1", "학생2", "학생3", "학생4", "학생5", "학생6"],
+    );
+    const h = state.players.filter((p) => p.team === "H").length;
+    expect(Math.abs(h - (state.players.length - h))).toBeLessThanOrEqual(1);
+  });
+
+  it("선 자리 색이 새 팀과 어긋나지 않는다", async () => {
+    for (let i = 0; i < 6; i++) await join(`학생${i}`);
+    await teacherCmd("newgame");
+    await teacherCmd("shuffleteams");
+
+    const state = (await rpc({ t: "sync" }, teacherCookie)).reply as StateMsg;
+    for (const p of state.players) {
+      expect(p.pos).not.toBeNull();
+      expect(state.board[p.pos!]!.o).toBe(p.team);
+    }
+    // 서 있는 사람 수만큼만 칠해져 있다 — 옛 팀 색이 남으면 이보다 많아진다
+    const painted = state.board.filter((c) => c.o !== null).length;
+    expect(painted).toBe(state.players.length);
+  });
+
+  it("판이 도는 중에는 거절한다", async () => {
+    await startGame();
+    const out = await teacherCmd("shuffleteams");
+    expect(out.ok).toBeFalsy();
+    expect(out.code).toBe("action-conflict");
+  });
+
+  it("학생이 없으면 거절한다", async () => {
+    const out = await teacherCmd("shuffleteams");
+    expect(out.ok).toBeFalsy();
+    expect(out.code).toBe("no-player");
   });
 });

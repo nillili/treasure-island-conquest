@@ -15,6 +15,7 @@ import {
   pickStealTarget,
   placeLatePlayer,
   rescueTrapped,
+  shuffle,
   trappedPlayers,
   cellLabel,
   turnKey,
@@ -387,6 +388,20 @@ export class RoomDO extends DurableObject<Env> {
       if (att?.playerId) out.push(att.playerId);
     }
     return out;
+  }
+
+  /** 이 학생 이름표를 달고 있는 소켓을 모두 끊는다 — 지금 말을 걸어온 소켓만 빼고. */
+  private closeSocketsOf(playerId: string, exceptWs?: WebSocket): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === exceptWs) continue;
+      const att = ws.deserializeAttachment() as Attach | null;
+      if (att?.playerId !== playerId) continue;
+      try {
+        ws.close(4002, "같은 이름으로 다시 들어왔습니다.");
+      } catch {
+        /* 이미 닫힘 */
+      }
+    }
   }
 
   // ── 쓰기 도우미 ─────────────────────────────────────────────────────────
@@ -1098,6 +1113,54 @@ export class RoomDO extends DurableObject<Env> {
     };
   }
 
+  /**
+   * 명단은 그대로 두고 **팀만 다시 나눈다.** 판이 시작되기 전에만 쓴다.
+   *
+   * 팀은 학생이 들어오는 순간 "지금 적은 쪽" 으로 정해진다(helloStudent). 그래서 먼저 온 다섯
+   * 명이 한 팀이 되는 일이 생기고, 선생님이 고르려면 명단을 통째로 비우는 [초기화] 밖에 길이
+   * 없었다. 그러면 학생 25명이 방 번호부터 다시 친다 — 그 값을 치를 이유가 없다.
+   *
+   * 판이 도는 중에는 거절한다. 중간에 팀이 바뀌면 이미 칠해진 땅의 주인이 사라져서,
+   * 점수가 어디서 왔는지 아무도 설명할 수 없게 된다.
+   */
+  private shuffleTeams(): void {
+    const room = this.needRoom();
+    if (room.status === "running") {
+      throw new Refused(E.conflict, "판이 도는 중에는 팀을 바꿀 수 없습니다. [새 게임]을 먼저 눌러 주세요.");
+    }
+    if (room.status === "ended") {
+      throw new Refused(E.conflict, "끝난 판입니다. [새 게임]을 먼저 눌러 주세요.");
+    }
+
+    // 깍두기는 [시작] 때 모자란 쪽에 들어온다. 여기서 섞을 것이 아니라 버린다 —
+    // 남겨 두면 다시 나눈 뒤에도 가상의 학생이 한 자리를 쥐고 있다.
+    this.sql.exec("DELETE FROM players WHERE id LIKE ?", `${BOT_PREFIX}%`);
+
+    const roster = shuffle(this.players());
+    if (!roster.length) throw new Refused(E.noPlayer, "아직 들어온 학생이 없습니다.");
+
+    // 홀수면 홍팀이 한 명 많다. 모자란 쪽은 [시작] 때 깍두기가 메운다.
+    const half = Math.ceil(roster.length / 2);
+    for (let i = 0; i < roster.length; i++) {
+      this.sql.exec("UPDATE players SET team = ? WHERE id = ?", i < half ? "H" : "C", roster[i]!.id);
+    }
+
+    // 선 자리는 그 학생의 팀 색으로 칠해져 있다. 팀이 바뀌었으니 자리도 다시 뽑는다 —
+    // 그러지 않으면 홍팀 학생이 청색 칸 위에 서 있게 된다.
+    // 대기 중에는 아직 아무도 땅을 먹지 않았으므로, 칠해진 칸은 선 자리뿐이라 통째로 비워도 된다.
+    if (this.cells().length) {
+      this.sql.exec("UPDATE cells SET owner = NULL");
+      this.sql.exec("UPDATE players SET pos = NULL");
+      const view = this.placementView(this.needRoom());
+      const before = this.snapshotView(view);
+      assignRandomPositions(view);
+      for (const team of ["H", "C"] as Team[]) rescueTrapped(view, team);
+      this.applyPlacement(view, before);
+    }
+    this.addEvent("shuffle", null, null, { count: roster.length });
+    this.bump();
+  }
+
   private newGame(clearPlayers: boolean): void {
     const room = this.needRoom();
     if (clearPlayers) this.sql.exec("DELETE FROM players");
@@ -1156,7 +1219,7 @@ export class RoomDO extends DurableObject<Env> {
 
   // ── 명령 처리 (WebSocket 과 폴백 RPC 가 같은 길을 지난다) ───────────────
 
-  private helloStudent(playerId: string | undefined, rawName: string): PlayerRow {
+  private helloStudent(playerId: string | undefined, rawName: string, exceptWs?: WebSocket): PlayerRow {
     const room = this.needRoom();
 
     if (playerId) {
@@ -1170,20 +1233,21 @@ export class RoomDO extends DurableObject<Env> {
     const name = rawName.trim();
     if (!name || name.length > 10) throw new Refused(E.noPlayer, "이름은 1~10자로 적어 주세요.");
 
-    // 같은 이름이 있고 그 학생이 지금 접속 중이 아니면 그 자리를 이어받는다.
+    // **이름이 곧 자리다.** 접속 중으로 보이든 아니든, 같은 이름이면 그 자리를 이어받는다.
     // 이게 없어서 2026-08-09 수업에 "수경" 이 10번, "수경2", "수경3" 이 따로 생겼다.
-    // 화면이 굳어 다시 들어올 때마다 서버가 새 사람을 만들었기 때문이다.
-    const online = new Set(this.onlineIds());
+    //
+    // 예전에는 여기서 "접속 중이면 다른 사람" 으로 보고 번호를 붙였다. 그런데 화면만 굳고
+    // 소켓은 살아 있는 학생이 바로 그 경우여서, 막아야 할 쪽에 정반대로 걸렸다. 게다가
+    // 원본이 명단에 남아 정원을 차지하므로 새 자리는 **거의 반드시 반대 팀**으로 갔다
+    // (2026-09-15 방 4788: 다시 들어온 4명 중 3명이 팀이 뒤집혔다. 차례까지 어긋났다).
+    // 교실에서 진짜 동명이인은 드물고, 화면이 굳어 다시 들어오는 일은 잦다 — 잦은 쪽을 살린다.
     const sameName = this.sql.exec<PlayerRow>("SELECT * FROM players WHERE name = ?", name).toArray()[0];
-    if (sameName && !online.has(sameName.id)) {
+    if (sameName) {
+      // 굳은 채 매달려 있던 옛 화면은 여기서 끊는다. 한 자리를 두 화면이 나눠 쥐면
+      // 방송이 양쪽으로 가고, 어느 쪽이 진짜인지 서버도 학생도 알 수 없다.
+      this.closeSocketsOf(sameName.id, exceptWs);
       this.sql.exec("UPDATE players SET last_seen_at = ? WHERE id = ?", Date.now(), sameName.id);
       return sameName;
-    }
-
-    // 접속 중인 동명이인이다. 다른 사람으로 보고 번호를 붙인다.
-    let finalName = name;
-    for (let n = 2; this.sql.exec("SELECT 1 FROM players WHERE name = ?", finalName).toArray().length; n++) {
-      finalName = `${name}${n}`;
     }
 
     const roster = this.players();
@@ -1199,7 +1263,7 @@ export class RoomDO extends DurableObject<Env> {
 
     this.sql.exec(
       "INSERT INTO players (id, name, team, joined_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
-      id, finalName, team, now, now,
+      id, name, team, now, now,
     );
 
     if (this.cells().length) {
@@ -1209,7 +1273,7 @@ export class RoomDO extends DurableObject<Env> {
       this.applyPlacement(view, before);
     }
     this.bump();
-    this.addEvent("join", id, null, { name: finalName, team });
+    this.addEvent("join", id, null, { name, team });
     return this.player(id)!;
   }
 
@@ -1483,6 +1547,10 @@ export class RoomDO extends DurableObject<Env> {
       case "reset":
         this.newGame(true);
         return { reply: { t: "ok" }, broadcastState: true };
+      case "shuffleteams": {
+        this.shuffleTeams();
+        return { reply: { t: "ok" }, broadcastState: true };
+      }
       case "next": {
         const room = this.needRoom();
         if (room.last_turn_at && Date.now() - room.last_turn_at < TURN_DEBOUNCE_MS) {
@@ -1510,6 +1578,14 @@ export class RoomDO extends DurableObject<Env> {
         for (const ws of this.ctx.getWebSockets()) {
           const att = ws.deserializeAttachment() as Attach | null;
           if (att?.playerId === id) {
+            // 끊기만 하면 화면이 스스로 다시 붙어 이름으로 재입장한다 — 지운 자리가 곧바로
+            // 되살아나 선생님이 명단을 정리할 길이 없었다(2026-09-15 방 4788, 14:27~14:28).
+            // 그래서 끊기 전에 "내보내졌다" 고 말해 준다. 화면은 이 말을 듣고 입장 화면으로 간다.
+            try {
+              ws.send(JSON.stringify({ t: "kicked", msg: "선생님이 내보냈어요.", serverNow: Date.now() }));
+            } catch {
+              /* 이미 죽은 소켓 */
+            }
             try {
               ws.close(4001, "선생님이 내보냈습니다.");
             } catch {
@@ -1745,7 +1821,11 @@ export class RoomDO extends DurableObject<Env> {
   }
 
   /** 소켓이 있든(WebSocket) 없든(폴백) 같은 입장 규칙을 쓴다. */
-  private helloAny(msg: ClientMessage & { t: "hello" }, teacherAtUpgrade: string | null): ActionResult & { me?: PlayerRow } {
+  private helloAny(
+    msg: ClientMessage & { t: "hello" },
+    teacherAtUpgrade: string | null,
+    exceptWs?: WebSocket,
+  ): ActionResult & { me?: PlayerRow } {
     const room = this.needRoom();
 
     if (msg.role === "teacher") {
@@ -1757,7 +1837,7 @@ export class RoomDO extends DurableObject<Env> {
       return { reply: this.stateMessage(true, null) };
     }
 
-    const me = this.helloStudent(msg.playerId, String(msg.name ?? ""));
+    const me = this.helloStudent(msg.playerId, String(msg.name ?? ""), exceptWs);
     return {
       me,
       reply: this.stateMessage(false, me),
@@ -1770,7 +1850,7 @@ export class RoomDO extends DurableObject<Env> {
     msg: ClientMessage & { t: "hello" },
     att: Attach,
   ): Promise<ActionResult> {
-    const out = this.helloAny(msg, att.teacherAtUpgrade);
+    const out = this.helloAny(msg, att.teacherAtUpgrade, ws);
     // Hibernation 중에는 메모리가 날아간다. 누구인지는 소켓에 붙여 둬야 살아남는다.
     ws.serializeAttachment(
       out.me

@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-09-11a">
-<script src="/net.js?v=2026-09-11a" defer></script>
-<script src="/sfx.js?v=2026-09-11a" defer></script>
-<script src="/app.js?v=2026-09-11a" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-09-23a">
+<script src="/net.js?v=2026-09-23a" defer></script>
+<script src="/sfx.js?v=2026-09-23a" defer></script>
+<script src="/app.js?v=2026-09-23a" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -110,7 +110,8 @@
       </div></div>
       <div id="size-hint" class="hint"></div>
       <div class="modal-actions">
-        <button class="button primary" id="create-room">방 만들기</button>
+        <button class="button primary" id="create-room"
+                title="새 방을 만듭니다. 방 번호가 새로 나오고, 학생들은 그 번호로 다시 들어와야 합니다.">방 만들기</button>
       </div>
     </div>
 
@@ -293,10 +294,15 @@
       <div class="card">
         <div class="turn-hint" id="turn-hint"></div>
         <div class="buttons">
-          <button class="button muted" id="new-game-button">🆕 새 게임</button>
+          <button class="button muted" id="new-game-button"
+                  title="점수와 땅을 지우고 새 판을 깝니다. 학생 명단과 팀은 그대로입니다.">🆕 새 게임</button>
           <button class="button primary" id="turn-button">▶ 시작</button>
-          <button class="button muted" id="end-game-button">종료</button>
-          <button class="button danger" id="reset-button">🧹 초기화</button>
+          <button class="button muted" id="end-game-button"
+                  title="이번 판을 끝내고 결과를 보여 줍니다. 학생들은 방에 그대로 남습니다.">종료</button>
+          <button class="button danger" id="reset-button"
+                  title="학생 명단까지 모두 비우고 새 판을 깝니다. 다음 반 수업을 시작할 때 씁니다.">🧹 초기화</button>
+          <button class="button muted wide" id="shuffle-teams-button"
+                  title="학생은 그대로 두고 팀만 무작위로 다시 나눕니다. 판이 시작되기 전에만 눌립니다.">🔀 팀 다시 나누기</button>
         </div>
       </div>
       <div class="card">
