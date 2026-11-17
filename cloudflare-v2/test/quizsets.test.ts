@@ -1,7 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { loginAs } from "./sso";
-import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import sampleCsv from "../public/sample-quiz.csv?raw";
 
 const BASE = "https://t.test";
 
@@ -11,7 +11,7 @@ async function signupOk(id: string) {
 }
 
 function xlsxBytes(): ArrayBuffer {
-  const bin = atob(env.FIXTURE_XLSX);
+  const bin = atob(env.FIXTURE_XLSX_HINT);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out.buffer;
@@ -55,7 +55,7 @@ describe("가입 선물", () => {
   it("샘플 파일은 내려받을 수 있다", async () => {
     const res = await SELF.fetch(`${BASE}/sample-quiz.csv`);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain("질문,정답");
+    expect(await res.text()).toContain("질문,힌트,정답");
   });
 });
 
@@ -103,7 +103,7 @@ describe("업로드", () => {
   });
 
   it("읽을 문항이 하나도 없으면 이유와 함께 거절한다", async () => {
-    const bad = new File(["질문,정답,예제1,예제2\n질문?,,가,나\n"], "빈.csv");
+    const bad = new File(["질문,힌트,정답,예제1,예제2\n질문?,,,가,나\n"], "빈.csv");
     const res = await upload(cookie, "빈퀴즈", bad);
     expect(res.status).toBe(400);
     const body = (await res.json()) as { problems: string[] };
@@ -111,8 +111,8 @@ describe("업로드", () => {
   });
 
   it("80문항을 넘기면 건너뛴 수를 알려 준다", async () => {
-    const rows = ["질문,정답,예제1,예제2"];
-    for (let i = 0; i < 100; i++) rows.push(`Q${i},1,가,나`);
+    const rows = ["질문,힌트,정답,예제1,예제2"];
+    for (let i = 0; i < 100; i++) rows.push(`Q${i},,1,가,나`);
     const res = await upload(cookie, "많은퀴즈", new File([rows.join("\n")], "많음.csv"));
     expect(await res.json()).toMatchObject({ itemCount: 80, skipped: 20 });
   });
@@ -135,6 +135,7 @@ describe("미리보기 · 이름 바꾸기 · 삭제", () => {
     expect(body.itemCount).toBe(50);
     expect(body.preview).toHaveLength(5);
     expect(body.preview[0]).toEqual({
+      hint: "우리 민족 최초의 나라를 세운 분으로, 곰이 사람이 된 이야기에 나와요.",
       q: "고조선을 세운 인물은 누구인가요?",
       options: ["단군왕검", "온조", "박혁거세", "주몽"],
       ans: 0,

@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS quizzes (
   ans     INTEGER NOT NULL
 );
 
+-- 문항의 힌트. 힌트가 있는 문항만 한 줄씩 둔다.
+-- quizzes 에 컬럼을 더하지 않은 이유는 아래 fx 와 같다 — 돌고 있는 방에는 새 컬럼이 안 생긴다.
+CREATE TABLE IF NOT EXISTS quiz_hints (
+  idx  INTEGER PRIMARY KEY,
+  hint TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS cells (
   idx          INTEGER PRIMARY KEY,
   type         TEXT    NOT NULL,

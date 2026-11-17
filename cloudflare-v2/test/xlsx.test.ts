@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import hintCsv from "../public/sample-quiz.csv?raw";
 import { parseCsv, parseQuizFile, parseQuizValues } from "../src/quiz";
 import { readXlsx } from "../src/xlsx";
 
@@ -24,12 +25,10 @@ describe("엑셀 읽기 — 골든 기준", () => {
     }
   });
 
-  it("문항으로 읽어도 CSV 와 완전히 같다", async () => {
+  it("힌트 칸이 없는 옛 형식 엑셀은 문항으로 받지 않는다", async () => {
     const fromXlsx = parseQuizValues(await readXlsx(sample()));
-    const fromCsv = parseQuizValues(parseCsv(sampleCsv));
-    expect(fromXlsx).toEqual(fromCsv);
-    expect(fromXlsx.bank).toHaveLength(50);
-    expect(fromXlsx.skipped).toBe(0);
+    expect(fromXlsx.bank).toHaveLength(0);
+    expect(fromXlsx.problems[0]).toContain("옛 형식");
   });
 
   it("rich text 로 쪼개진 머리글을 이어 붙인다", async () => {
@@ -60,11 +59,12 @@ describe("시트 고르기", () => {
 });
 
 describe("업로드 경로", () => {
-  it("엑셀 파일을 그대로 올려도 읽힌다", async () => {
-    const file = new File([sample()], "보물섬점령전_DB.xlsx");
+  it("엑셀 파일을 그대로 올려도 읽힌다 — CSV 와 같은 문항·힌트", async () => {
+    const file = new File([bytesOf(env.FIXTURE_XLSX_HINT)], "퀴즈.xlsx");
     const r = await parseQuizFile(file);
     expect(r.bank).toHaveLength(50);
     expect(r.skipped).toBe(0);
+    expect(r).toEqual(parseQuizValues(parseCsv(hintCsv)));
   });
 
   it("엑셀인 척하는 깨진 파일은 CSV 로 저장하라고 알려 준다", async () => {

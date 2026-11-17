@@ -3,6 +3,7 @@ declare namespace Cloudflare {
   interface Env {
     TEST_MIGRATIONS: import("cloudflare:test").D1Migration[];
     FIXTURE_XLSX: string; // base64
+    FIXTURE_XLSX_HINT: string; // base64
     FIXTURE_MULTISHEET: string; // base64
   }
 }

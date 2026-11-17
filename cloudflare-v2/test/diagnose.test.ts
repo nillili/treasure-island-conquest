@@ -1,7 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { loginAs } from "./sso";
-import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import sampleCsv from "../public/sample-quiz.csv?raw";
 import appJs from "../public/app.js?raw";
 import indexHtml from "../public/index.html?raw";
 import { BUILD } from "../src/diagnose";
@@ -68,8 +68,8 @@ describe("시스템 점검", () => {
   });
 
   it("문항이 적은 퀴즈를 짚어 준다", async () => {
-    const rows = ["질문,정답,예제1,예제2"];
-    for (let i = 0; i < 5; i++) rows.push(`Q${i},1,가,나`);
+    const rows = ["질문,힌트,정답,예제1,예제2"];
+    for (let i = 0; i < 5; i++) rows.push(`Q${i},,1,가,나`);
     const form = new FormData();
     form.set("title", "짧은퀴즈");
     form.set("file", new File([rows.join("\n")], "짧음.csv"));

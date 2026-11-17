@@ -271,3 +271,7 @@
 
 /* 짝을 맞추러 들어온 가상의 학생. 사람과 한눈에 구분돼야 한다 (2026-09-05) */
 .person.bot{background:#eef1f4;color:#6d8390;border-style:dashed}
+
+/* 학생이 [힌트] 를 눌렀을 때 질문 아래에 펼쳐지는 줄 (2026-10-13) */
+#quiz-hint-btn{margin:0 0 12px;padding:12px 22px;font-size:18px;background:#f0b429;color:#3d2c00;border:2px solid #c98f0a;box-shadow:0 3px 0 #c98f0a}
+.quiz-hint{margin:0 0 12px;padding:10px 12px;background:#fff8e1;border:2px solid #eec768;border-radius:10px;font-size:16px;line-height:1.5}

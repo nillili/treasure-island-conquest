@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>보물섬 점령전</title>
-<link rel="stylesheet" href="/style.css?v=2026-09-24a">
-<script src="/net.js?v=2026-09-24a" defer></script>
-<script src="/sfx.js?v=2026-09-24a" defer></script>
-<script src="/app.js?v=2026-09-24a" defer></script>
+<link rel="stylesheet" href="/style.css?v=2026-10-18a">
+<script src="/net.js?v=2026-10-18a" defer></script>
+<script src="/sfx.js?v=2026-10-18a" defer></script>
+<script src="/app.js?v=2026-10-18a" defer></script>
 </head>
 <body>
 <div id="toast" class="toast"></div>
@@ -104,7 +104,7 @@
 <div id="upload-modal" class="dim hidden">
   <form class="modal" id="upload-form">
     <h2>엑셀 올리기</h2>
-    <div class="hint">첫 줄은 머리글입니다 — <b>질문 · 정답 · 예제1~4</b>.
+    <div class="hint">칸 순서 — <b>질문 · 힌트 · 정답 · 예제1~4</b>. 힌트는 비워도 됩니다.
       정답은 숫자(1~4)로 적어 주세요. 최대 80문항.<br>
       <a href="/sample-quiz.csv" download="보물섬_퀴즈_샘플.csv">📥 샘플 파일 받기</a> —
       이걸 열어 내용만 바꾸면 형식이 어긋날 일이 없습니다.</div>
@@ -130,6 +130,8 @@
     <div id="play-quiz" class="hidden">
       <h3 class="play-where">🎯 <span id="quiz-cell"></span></h3>
       <h2 id="quiz-question"></h2>
+      <button class="button hidden" id="quiz-hint-btn">💡 힌트</button>
+      <p class="quiz-hint hidden" id="quiz-hint"></p>
       <div class="options" id="quiz-options"></div>
       <button class="button muted top-gap" id="quiz-cancel">그만두기</button>
     </div>

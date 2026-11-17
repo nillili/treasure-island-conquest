@@ -1,8 +1,10 @@
 /**
  * 퀴즈 파일 읽기 — apps-script/Backend.gs:687 parseQuizValues_ 를 그대로 옮겼다.
  *
- * 표 한 줄 = 문항 하나.  A:질문 · B:정답 · C~F:예제1~예제4
- * 정답은 번호로 쓴다. 1 = 예제1 … 4 = 예제4.
+ * 표 한 줄 = 문항 하나.  A:질문 · B:힌트 · C:정답 · D~G:예제1~예제4
+ * 정답은 번호로 쓴다. 1 = 예제1 … 4 = 예제4. 힌트는 비워도 된다.
+ * 첫 줄이 '질문' 으로 시작하면 머리글로 보고 건너뛴다. 아니면 첫 줄부터 문항이다.
+ * 힌트 칸이 없는 옛 형식(A:질문 · B:정답 · C~F:예제)은 받지 않는다.
  * (예전에는 정답 칸에 보기 '내용'을 적어도 받아 줬다. 그 방식은 보기 문구만 고치고
  *  정답 칸을 안 고치면 조용히 어긋난다. 번호는 그럴 일이 없다.
  *  옛 파일을 그대로 쓸 수 있게 글자 정답도 계속 받되, 문제가 있는 줄은 이유를 남긴다.)
@@ -12,6 +14,7 @@ import { readXlsx } from "./xlsx";
 
 export interface QuizItem {
   q: string;
+  hint?: string; // 빈 힌트는 아예 넣지 않는다
   options: string[];
   ans: number; // 0-based
 }
@@ -22,6 +25,8 @@ export interface ParseResult {
   problems: string[];
 }
 
+const OLD_FORMAT = "힌트 칸이 없는 옛 형식입니다. 칸 순서를 질문 · 힌트 · 정답 · 예제1~4 로 맞춰 주세요.";
+
 /** 한 퀴즈에 담는 문항 상한. 넘는 줄은 읽지 않고 건너뛴다. */
 export const MAX_ITEMS = 80;
 
@@ -30,13 +35,26 @@ export function parseQuizValues(values: string[][]): ParseResult {
   const problems: string[] = [];
   let skipped = 0;
 
-  for (let r = 1; r < values.length; r++) {
+  const cell = (row: string[] | undefined, i: number) => String(row?.[i] ?? "").trim();
+  const hasHead = cell(values[0], 0) === "질문";
+  if (hasHead && cell(values[0], 1) === "정답") {
+    return { bank, skipped: 0, problems: [OLD_FORMAT] };
+  }
+
+  for (let r = hasHead ? 1 : 0; r < values.length; r++) {
     const row = values[r] ?? [];
-    const q = String(row[0] ?? "").trim();
-    const raw = String(row[1] ?? "").trim();
-    if (!q && !raw) continue; // 완전히 빈 줄은 조용히 넘긴다
+    const q = cell(row, 0);
+    const hint = cell(row, 1);
+    const raw = cell(row, 2);
+    if (!q && !hint && !raw) continue; // 완전히 빈 줄은 조용히 넘긴다
 
     const line = r + 1; // 표에 보이는 행 번호
+    // 옛 형식 줄: B 에 정답 번호, C 에 보기 글자.
+    if (/^[1-9]$/.test(hint) && raw && !/^[0-9]+$/.test(raw)) {
+      skipped++;
+      problems.push(`${line}행: ${OLD_FORMAT}`);
+      continue;
+    }
     if (!q || !raw) {
       skipped++;
       problems.push(`${line}행: ${q ? "정답" : "질문"} 칸이 비었습니다.`);
@@ -44,7 +62,7 @@ export function parseQuizValues(values: string[][]): ParseResult {
     }
 
     // 빈 칸은 '뒤쪽만' 잘라 낸다. 가운데를 지우면 번호가 밀려 3번이 4번을 가리키게 된다.
-    const opts = row.slice(2, 6).map((x) => String(x ?? "").trim());
+    const opts = row.slice(3, 7).map((x) => String(x ?? "").trim());
     while (opts.length && opts[opts.length - 1] === "") opts.pop();
     if (opts.length < 2) {
       skipped++;
@@ -83,7 +101,7 @@ export function parseQuizValues(values: string[][]): ParseResult {
         continue;
       }
     }
-    bank.push({ q, options: opts, ans });
+    bank.push(hint ? { q, hint, options: opts, ans } : { q, options: opts, ans });
   }
 
   if (bank.length > MAX_ITEMS) {

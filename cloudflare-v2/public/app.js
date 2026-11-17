@@ -28,7 +28,7 @@ const APP = {
 };
 
 /** 서버의 BUILD 와 같아야 한다. 다르면 브라우저가 옛 화면을 물고 있는 것이다. */
-const APP_BUILD = "2026-09-24a";
+const APP_BUILD = "2026-10-18a";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -742,6 +742,9 @@ function renderQuiz(msg) {
   playGen++; // 새 문제가 창을 넘겨받는다. 앞 결과의 닫기 타이머는 무효가 된다.
   $("quiz-cell").textContent = cellLabel(msg.cell, APP.state.cols);
   $("quiz-question").textContent = msg.q;
+  $("quiz-hint").textContent = msg.hint || "";
+  $("quiz-hint").classList.add("hidden");
+  $("quiz-hint-btn").classList.toggle("hidden", !msg.hint);
   $("quiz-options").innerHTML = msg.options
     .map((x, i) => `<button class="option" data-choice="${i}"><b>${i + 1}</b>${esc(x)}</button>`)
     .join("");
@@ -1199,6 +1202,11 @@ document.addEventListener("click", async (event) => {
 
   const choice = t.closest("[data-choice]");
   if (choice) return submitChoice(Number(choice.dataset.choice));
+  if (t.closest("#quiz-hint-btn")) {
+    $("quiz-hint-btn").classList.add("hidden");
+    $("quiz-hint").classList.remove("hidden");
+    return;
+  }
   if (t.closest("#quiz-cancel")) {
     APP.mode = "waiting";
     hideQuiz();

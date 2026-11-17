@@ -1,7 +1,8 @@
 import { SELF, env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { loginAs } from "./sso";
-import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import sampleCsv from "../public/sample-quiz.csv?raw";
+import { parseCsv } from "../src/quiz";
 
 const BASE = "https://t.test";
 
@@ -258,6 +259,36 @@ describe("게임 진행", () => {
     const quiz = await rpc({ t: "pick", cell, actionId: "y", playerId: hong.myPlayer!.id });
     expect((quiz.reply as { t: string; options: string[] }).t).toBe("quiz");
     expect((quiz.reply as { options: string[] }).options.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("힌트가 있는 문항은 힌트를 같이 보내고, 없는 문항은 보내지 않는다 (2026-10-13)", async () => {
+    async function firstQuiz() {
+      const a = await join("민수");
+      const b = await join("영희");
+      await teacherCmd("next"); // 홍팀 차례
+      const hong = (await myState(a.myPlayer!.id)).myPlayer!.team === "H" ? a : b;
+      const cell = pickableCell(await myState(hong.myPlayer!.id));
+      const out = await rpc({ t: "pick", cell, actionId: crypto.randomUUID(), playerId: hong.myPlayer!.id });
+      return out.reply as { t: string; hint?: string };
+    }
+
+    await teacherCmd("newgame"); // 샘플 — 모든 문항에 힌트가 있다
+    const withHint = await firstQuiz();
+    expect(withHint.t).toBe("quiz");
+    expect(withHint.hint).toBeTruthy();
+
+    // 같은 문항에서 힌트 칸만 비운 퀴즈로 바꾼다.
+    const noHint = parseCsv(sampleCsv)
+      .map((r, i) => (i === 0 ? r : [r[0]!, "", ...r.slice(2)]).map((c) => `"${c.replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const form = new FormData();
+    form.set("title", "힌트없음");
+    form.set("file", new File([noHint], "힌트없음.csv", { type: "text/csv" }));
+    const up = await SELF.fetch(`${BASE}/api/quizsets`, { method: "POST", headers: { cookie: teacherCookie }, body: form });
+    await teacherCmd("newgame", { quizSetId: ((await up.json()) as { id: number }).id });
+    const without = await firstQuiz();
+    expect(without.t).toBe("quiz");
+    expect("hint" in without).toBe(false);
   });
 
   it("정답을 맞히면 칸이 넘어오고 점수가 오른다", async () => {

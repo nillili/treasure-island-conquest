@@ -234,9 +234,9 @@ const csvCell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"
  */
 function toCsv(items: QuizItem[]): string {
   const width = Math.max(2, ...items.map((it) => it.options.length));
-  const head = ["질문", "정답", ...Array.from({ length: width }, (_, i) => `예제${i + 1}`)];
+  const head = ["질문", "힌트", "정답", ...Array.from({ length: width }, (_, i) => `예제${i + 1}`)];
   const rows = items.map((it) => {
-    const cells = [it.q, String(it.ans + 1), ...it.options];
+    const cells = [it.q, it.hint ?? "", String(it.ans + 1), ...it.options];
     while (cells.length < head.length) cells.push("");
     return cells.map(csvCell).join(",");
   });

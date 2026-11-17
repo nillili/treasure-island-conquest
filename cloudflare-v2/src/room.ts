@@ -60,6 +60,8 @@ const BOT_PREFIX = "bot_";
 const BOT_NAME = "깍두기";
 /** 아직 아무도 안 푼 첫 턴에 쓸 정답률. 실측 20판의 전체 정답률 중앙값이다. */
 const BOT_FALLBACK_RATE = 0.75;
+/** 깍두기는 평균보다 이만큼(5%p) 더 잘 맞힌다(2026-10-18). */
+const BOT_RATE_BONUS = 0.05;
 
 /** 이 id 가 가상의 학생인가. 이름이 아니라 id 로 가린다 — 학생이 "깍두기" 라고 적을 수 있다. */
 function isBot(id: string): boolean {
@@ -639,14 +641,16 @@ export class RoomDO extends DurableObject<Env> {
     await this.reschedule();
   }
 
-  private writeQuizzes(items: { q: string; options: string[]; ans: number }[]): void {
+  private writeQuizzes(items: { q: string; hint?: string; options: string[]; ans: number }[]): void {
     this.sql.exec("DELETE FROM quizzes");
+    this.sql.exec("DELETE FROM quiz_hints");
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
       this.sql.exec(
         "INSERT INTO quizzes (idx, q, options, ans) VALUES (?, ?, ?, ?)",
         i, item.q, JSON.stringify(item.options), item.ans,
       );
+      if (item.hint) this.sql.exec("INSERT INTO quiz_hints (idx, hint) VALUES (?, ?)", i, item.hint);
     }
   }
 
@@ -939,7 +943,7 @@ export class RoomDO extends DurableObject<Env> {
 
   /**
    * 깍두기가 자기 차례에 한 수씩 둔다. 학생과 똑같은 규칙을 지난다 —
-   * 이웃 빈 칸 하나를 골라, 실제 학생들의 평균 정답률만큼 맞힌다.
+   * 이웃 빈 칸 하나를 골라, 실제 학생들의 평균 정답률보다 5%p 높게 맞힌다.
    * 맞히면 땅을 먹고 움직이며 보물·폭풍·공격도 그대로 겪는다.
    */
   private playBots(turnTeam: Team, round: number): number[] {
@@ -947,7 +951,7 @@ export class RoomDO extends DurableObject<Env> {
     const bots = this.players().filter((p) => isBot(p.id) && p.team === turnTeam && p.pos !== null);
     if (!bots.length) return [];
 
-    const rate = this.answerRate();
+    const rate = Math.min(1, this.answerRate() + BOT_RATE_BONUS);
     const changed: number[] = [];
 
     for (const me of bots) {
@@ -1379,12 +1383,17 @@ export class RoomDO extends DurableObject<Env> {
       .toArray()[0];
     if (!quiz) throw new Refused(E.noQuiz, "이 칸의 문제를 찾을 수 없어요.");
 
+    const hint = this.sql
+      .exec<{ hint: string }>("SELECT hint FROM quiz_hints WHERE idx = ?", target.quiz_idx)
+      .toArray()[0]?.hint;
+
     this.sql.exec("UPDATE players SET attempt_cell = ?, attempt_started_at = ? WHERE id = ?", cell, now, me.id);
     this.bump();
 
     // 채점에 쓸 바로 그 문제를 보낸다. 정답은 넣지 않는다 — 채점하는 곳이 하나여야 어긋나지 않는다.
+    // 힌트는 있을 때만 싣는다. 없으면 학생 화면에 힌트 버튼이 안 나온다.
     return {
-      reply: { t: "quiz", cell, q: quiz.q, options: JSON.parse(quiz.options) as string[], serverNow: now },
+      reply: { t: "quiz", cell, q: quiz.q, ...(hint ? { hint } : {}), options: JSON.parse(quiz.options) as string[], serverNow: now },
       broadcast: this.patchMessage([], []),
     };
   }

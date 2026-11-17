@@ -39,6 +39,8 @@ export default defineConfig({
           FIXTURE_XLSX: base64("../sample/보물섬점령전_DB.xlsx"),
           // 같은 파일의 정리 전 모습(퀴즈 + 숨긴 탭 2개). 시트 고르기를 확인한다.
           FIXTURE_MULTISHEET: base64("./test/fixtures/multisheet.xlsx"),
+          // 새 형식(질문·힌트·정답·예제) 엑셀. public/sample-quiz.csv 를 그대로 옮겼다.
+          FIXTURE_XLSX_HINT: base64("./test/fixtures/quiz-hint.xlsx"),
         },
       },
     }),

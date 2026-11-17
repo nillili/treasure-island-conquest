@@ -1,7 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { idOf, loginAs } from "./sso";
-import sampleCsv from "../../sample/퀴즈_샘플_v3.csv?raw";
+import sampleCsv from "../public/sample-quiz.csv?raw";
 
 const BASE = "https://t.test";
 
